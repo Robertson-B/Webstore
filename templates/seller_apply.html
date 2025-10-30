@@ -20,15 +20,10 @@
                 <label class="form-label">Business name</label>
                 <input name="business_name" class="form-control" placeholder="Your shop name">
               </div>
-              <div class="mb-3">
-                <label class="form-label">Logo URL / filename (optional)</label>
-                <input name="logo_url" class="form-control" placeholder="/static/img/logo.png or logo.png or https://...">
-                <div class="form-text">If you provide a bare filename it will be treated as <code>/static/img/&lt;name&gt;</code>.</div>
-              </div>
-              <div class="mb-3">
-                <label class="form-label">About / message</label>
-                <textarea name="message" class="form-control" rows="5" placeholder="Tell us about your business"></textarea>
-              </div>
+                <div class="mb-3">
+                  <label class="form-label">Seller description</label>
+                  <textarea name="seller_description" class="form-control" rows="6" placeholder="Brief description of your shop, what you sell, location, policies, etc."></textarea>
+                </div>
               <div class="d-flex gap-2">
                 <button class="btn btn-primary">Submit application</button>
                 <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>

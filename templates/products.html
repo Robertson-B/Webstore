@@ -86,7 +86,12 @@
                 {% for p in products %}
                     <div class="col-md-6 col-lg-4">
                         <div class="listing-card">
-                                                                                                                <h5>{{ p['title'] }}</h5>
+                                                                                                                <h5>
+                                                                                                                    {{ p['title'] }}
+                                                                                                                    {% if p['stock'] is not none and p['stock']|int <= 0 %}
+                                                                                                                        <span class="badge bg-danger ms-2">Out of stock</span>
+                                                                                                                    {% endif %}
+                                                                                                                </h5>
                                                                                                                 <p class="price">${{ '%.2f'|format(p['price']) }}</p>
                                                                                                                 {% if 'image_url' in p.keys() and p['image_url'] %}
                                                                                                                     <div class="mb-2 text-center">

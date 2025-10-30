@@ -6,6 +6,7 @@ from decimal import Decimal
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
+
 app = Flask(__name__)
 app.secret_key = "change_this_to_a_random_secret"
 
@@ -16,6 +17,37 @@ def get_db_connection(path=DB_PATH):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+
+def ensure_seller_applications_table(conn):
+    """Ensure the seller_applications table exists and has the expected columns.
+    Adds a `status` column if it's missing to support approve/reject flows.
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS seller_applications (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            business_name TEXT,
+            message TEXT,
+            logo_url TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.commit()
+    # ensure `status` column exists (older installs may have a table without it)
+    cur.execute("PRAGMA table_info(seller_applications)")
+    cols = [r[1] for r in cur.fetchall()]
+    # ensure `status` column exists (older installs may have a table without it)
+    if 'status' not in cols:
+        cur.execute("ALTER TABLE seller_applications ADD COLUMN status TEXT DEFAULT 'pending'")
+        conn.commit()
+    # ensure seller_description column exists
+    if 'seller_description' not in cols:
+        cur.execute("ALTER TABLE seller_applications ADD COLUMN seller_description TEXT")
+        conn.commit()
+
 
 def ensure_cart():
     if 'cart' not in session:
@@ -96,7 +128,7 @@ def index():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT p.id, p.title, p.description, p.price, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username
+        SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username
         FROM products p 
         LEFT JOIN users u ON p.seller_id = u.id 
         ORDER BY p.created_at DESC LIMIT 6
@@ -154,6 +186,7 @@ def product_detail(product_id):
         flash("Product not found.")
         return redirect(url_for('products'))
     return render_template('product_detail.html', product=product)
+
 
 @app.route('/cart')
 def cart_view():
@@ -498,7 +531,7 @@ def seller_profile(seller_id):
     products = []
     if seller:
         cur.execute(
-            "SELECT id, title, description, price, created_at, image_url FROM products WHERE seller_id = ? ORDER BY created_at DESC",
+            "SELECT id, title, description, price, stock, created_at, image_url FROM products WHERE seller_id = ? ORDER BY created_at DESC",
             (seller_id,)
         )
         products = cur.fetchall()
@@ -507,26 +540,77 @@ def seller_profile(seller_id):
     return render_template('seller_profile.html', seller=seller, products=products)
 
 
+@app.route('/seller/<int:seller_id>/contact', methods=['GET', 'POST'])
+def seller_contact(seller_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, business_name FROM users WHERE id = ?", (seller_id,))
+    seller = cur.fetchone()
+    if not seller:
+        conn.close()
+        flash("Seller not found.")
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        name = request.form.get('name','').strip()
+        email = request.form.get('email','').strip()
+        subject = request.form.get('subject','').strip()
+        message = request.form.get('message','').strip()
+
+        if not name or not email or not message:
+            flash('Please fill in your name, email and message.')
+            conn.close()
+            # if AJAX, return JSON error
+            wants_json = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json
+            if wants_json:
+                conn.close()
+                return jsonify({"ok": False, "error": "Please fill in your name, email and message."}), 400
+            return render_template('seller_contact.html', seller=seller, form=request.form)
+
+        # store message for review (table created on demand)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS seller_messages (
+                id INTEGER PRIMARY KEY,
+                seller_id INTEGER,
+                sender_name TEXT,
+                sender_email TEXT,
+                subject TEXT,
+                message TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        cur.execute("INSERT INTO seller_messages (seller_id, sender_name, sender_email, subject, message) VALUES (?, ?, ?, ?, ?)",
+                    (seller_id, name, email, subject, message))
+        conn.commit()
+        conn.close()
+        wants_json = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json
+        if wants_json:
+            return jsonify({"ok": True, "message": "Your message was sent to the seller."})
+        flash('Your message was sent to the seller.')
+        return redirect(url_for('seller_profile', seller_id=seller_id))
+
+    conn.close()
+    return render_template('seller_contact.html', seller=seller)
+
+
 # Seller application flow
 @app.route('/apply-seller', methods=['GET', 'POST'])
 @login_required
 def apply_seller():
-    # simple applications table (created on demand)
+    # ensure applications table exists with expected schema
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS seller_applications (id INTEGER PRIMARY KEY, user_id INTEGER, business_name TEXT, message TEXT, logo_url TEXT, created_at TEXT DEFAULT (datetime('now')))"
-               )
+    ensure_seller_applications_table(conn)
 
     if request.method == 'POST':
         business_name = request.form.get('business_name','').strip() or None
-        message = request.form.get('message','').strip() or None
-        logo_url = request.form.get('logo_url','').strip() or None
-        # normalize bare filenames to /static/img/<name>
-        if logo_url and not (logo_url.startswith('http://') or logo_url.startswith('https://') or logo_url.startswith('/')):
-            logo_url = f"/static/img/{logo_url}"
+        seller_description = request.form.get('seller_description','').strip() or None
+        # no logo_url accepted from applicant form anymore (admins set logos)
 
-        cur.execute("INSERT INTO seller_applications (user_id, business_name, message, logo_url) VALUES (?, ?, ?, ?)",
-                    (session.get('user_id'), business_name, message, logo_url))
+        cur.execute("INSERT INTO seller_applications (user_id, business_name, seller_description) VALUES (?, ?, ?)",
+                    (session.get('user_id'), business_name, seller_description))
         conn.commit()
         conn.close()
         flash("Application submitted. We'll review it and follow up.")
@@ -541,11 +625,14 @@ def apply_seller():
 def admin_index():
     conn = get_db_connection()
     cur = conn.cursor()
+    # ensure applications table exists so the subquery below won't fail
+    ensure_seller_applications_table(conn)
     cur.execute("""
         SELECT
           (SELECT COUNT(*) FROM products) AS products_count,
           (SELECT COUNT(*) FROM users) AS users_count,
-          (SELECT COUNT(*) FROM orders) AS orders_count
+          (SELECT COUNT(*) FROM orders) AS orders_count,
+          (SELECT COUNT(*) FROM seller_applications WHERE status IS NULL OR status = 'pending') AS pending_applications
     """)
     stats = cur.fetchone()
     conn.close()
@@ -579,6 +666,53 @@ def admin_order_detail(order_id):
     items = cur.fetchall()
     conn.close()
     return render_template('admin/order_detail.html', order=order, items=items)
+
+
+@app.route('/admin/seller_applications')
+@admin_required
+def admin_seller_applications():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    ensure_seller_applications_table(conn)
+    cur.execute("SELECT sa.id, sa.user_id, sa.business_name, sa.seller_description, sa.logo_url, sa.status, sa.created_at, u.username, u.email FROM seller_applications sa LEFT JOIN users u ON sa.user_id = u.id ORDER BY sa.created_at DESC")
+    applications = cur.fetchall()
+    conn.close()
+    return render_template('admin/seller_applications.html', applications=applications)
+
+
+@app.route('/admin/seller_applications/<int:app_id>/<action>', methods=['POST'])
+@admin_required
+def admin_seller_application_action(app_id, action):
+    if action not in ('approve', 'reject'):
+        flash('Invalid action.')
+        return redirect(url_for('admin_seller_applications'))
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM seller_applications WHERE id = ?', (app_id,))
+    app_row = cur.fetchone()
+    if not app_row:
+        conn.close()
+        flash('Application not found.')
+        return redirect(url_for('admin_seller_applications'))
+
+    if action == 'approve':
+        # mark user as seller and copy details if present
+        cur.execute(
+            'UPDATE users SET is_seller = 1, business_name = COALESCE(?, business_name), logo_url = COALESCE(?, logo_url), seller_description = COALESCE(?, seller_description) WHERE id = ?',
+            (app_row['business_name'], app_row['logo_url'], app_row['seller_description'], app_row['user_id'])
+        )
+        # remove the application after approval
+        cur.execute("DELETE FROM seller_applications WHERE id = ?", (app_id,))
+        flash('Application approved and user promoted to seller.')
+    else:
+        # remove application on rejection
+        cur.execute("DELETE FROM seller_applications WHERE id = ?", (app_id,))
+        flash('Application rejected.')
+
+    conn.commit()
+    conn.close()
+    return redirect(url_for('admin_seller_applications'))
 
 # Product management
 @app.route('/admin/products')
