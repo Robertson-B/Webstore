@@ -490,7 +490,7 @@ def seller_profile(seller_id):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, username, business_name, seller_description, rating, total_sales FROM users WHERE id = ?",
+        "SELECT id, username, business_name, seller_description, rating, total_sales, logo_url FROM users WHERE id = ?",
         (seller_id,)
     )
     seller = cur.fetchone()
@@ -498,13 +498,42 @@ def seller_profile(seller_id):
     products = []
     if seller:
         cur.execute(
-            "SELECT id, title, description, price, created_at FROM products WHERE seller_id = ? ORDER BY created_at DESC",
+            "SELECT id, title, description, price, created_at, image_url FROM products WHERE seller_id = ? ORDER BY created_at DESC",
             (seller_id,)
         )
         products = cur.fetchall()
 
     conn.close()
     return render_template('seller_profile.html', seller=seller, products=products)
+
+
+# Seller application flow
+@app.route('/apply-seller', methods=['GET', 'POST'])
+@login_required
+def apply_seller():
+    # simple applications table (created on demand)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS seller_applications (id INTEGER PRIMARY KEY, user_id INTEGER, business_name TEXT, message TEXT, logo_url TEXT, created_at TEXT DEFAULT (datetime('now')))"
+               )
+
+    if request.method == 'POST':
+        business_name = request.form.get('business_name','').strip() or None
+        message = request.form.get('message','').strip() or None
+        logo_url = request.form.get('logo_url','').strip() or None
+        # normalize bare filenames to /static/img/<name>
+        if logo_url and not (logo_url.startswith('http://') or logo_url.startswith('https://') or logo_url.startswith('/')):
+            logo_url = f"/static/img/{logo_url}"
+
+        cur.execute("INSERT INTO seller_applications (user_id, business_name, message, logo_url) VALUES (?, ?, ?, ?)",
+                    (session.get('user_id'), business_name, message, logo_url))
+        conn.commit()
+        conn.close()
+        flash("Application submitted. We'll review it and follow up.")
+        return redirect(url_for('index'))
+
+    conn.close()
+    return render_template('seller_apply.html')
 
 # Admin dashboard
 @app.route('/admin')
@@ -710,7 +739,7 @@ def admin_user_toggle_seller(user_id):
 def admin_edit_seller(user_id):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, username, business_name, seller_description, rating, total_sales, is_seller FROM users WHERE id = ?", (user_id,))
+    cur.execute("SELECT id, username, business_name, seller_description, rating, total_sales, is_seller, logo_url FROM users WHERE id = ?", (user_id,))
     u = cur.fetchone()
     if not u:
         conn.close()
@@ -720,6 +749,10 @@ def admin_edit_seller(user_id):
     if request.method == 'POST':
         business_name = request.form.get('business_name','').strip() or None
         seller_description = request.form.get('seller_description','').strip() or None
+        logo_url = request.form.get('logo_url','').strip() or None
+        # normalize bare filenames to /static/img/<name>
+        if logo_url and not (logo_url.startswith('http://') or logo_url.startswith('https://') or logo_url.startswith('/')):
+            logo_url = f"/static/img/{logo_url}"
         try:
             rating = float(request.form.get('rating','0') or 0)
         except ValueError:
@@ -730,8 +763,12 @@ def admin_edit_seller(user_id):
             total_sales = 0
 
         # ensure user is marked as seller
-        cur.execute("UPDATE users SET business_name = ?, seller_description = ?, rating = ?, total_sales = ?, is_seller = 1 WHERE id = ?",
-                    (business_name, seller_description, rating, total_sales, user_id))
+        if logo_url is not None:
+            cur.execute("UPDATE users SET business_name = ?, seller_description = ?, rating = ?, total_sales = ?, is_seller = 1, logo_url = ? WHERE id = ?",
+                        (business_name, seller_description, rating, total_sales, logo_url, user_id))
+        else:
+            cur.execute("UPDATE users SET business_name = ?, seller_description = ?, rating = ?, total_sales = ?, is_seller = 1 WHERE id = ?",
+                        (business_name, seller_description, rating, total_sales, user_id))
         conn.commit()
         conn.close()
         flash("Seller details updated.")

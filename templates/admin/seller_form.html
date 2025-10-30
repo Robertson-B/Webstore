@@ -28,6 +28,11 @@
           <label class="form-label">Total sales</label>
           <input name="total_sales" class="form-control" value="{{ user['total_sales'] or 0 }}">
         </div>
+        <div class="col-md-4 mb-3">
+          <label class="form-label">Logo URL / filename</label>
+          <input name="logo_url" class="form-control" value="{{ user['logo_url'] or '' }}" placeholder="/static/img/logo.png or logo.png or https://...">
+          <div class="form-text">If you provide a bare filename it will be treated as <code>/static/img/&lt;name&gt;</code>.</div>
+        </div>
         <div class="col-md-4 mb-3 align-self-end">
           <div class="form-check mt-2">
             <input class="form-check-input" type="checkbox" id="is_seller" name="is_seller" {% if user['is_seller'] %}checked{% endif %} disabled>
