@@ -13,11 +13,25 @@ app.secret_key = "change_this_to_a_random_secret"
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "webstore.db")
 
+# SQLite INTEGER is signed 64-bit: range is -(2**63) .. 2**63-1
+# Protect against Python ints larger than the SQLite C type can hold.
+MAX_SQLITE_INT = 2**63 - 1
+
 def get_db_connection(path=DB_PATH):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+
+# Ensure categories table and products.category_id exist on startup (best-effort)
+try:
+    _conn = get_db_connection()
+    ensure_categories_table(_conn)
+    _conn.close()
+except Exception:
+    # If DB isn't yet created or another startup issue occurs, skip; migration will run later when needed
+    pass
 
 
 @app.route('/favicon.ico')
@@ -95,6 +109,41 @@ def ensure_seller_applications_table(conn):
     if 'seller_description' not in cols:
         cur.execute("ALTER TABLE seller_applications ADD COLUMN seller_description TEXT")
         conn.commit()
+
+
+def ensure_categories_table(conn):
+    """Create categories table if missing and add category_id column to products if needed.
+    This is a best-effort, non-destructive migration: category_id is nullable.
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS categories (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            slug TEXT UNIQUE,
+            description TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.commit()
+
+    # ensure products table has category_id column (nullable)
+    try:
+        cur.execute("PRAGMA table_info(products)")
+        cols = [r[1] for r in cur.fetchall()]
+        if 'category_id' not in cols:
+            cur.execute("ALTER TABLE products ADD COLUMN category_id INTEGER")
+            conn.commit()
+    except Exception:
+        # if products table doesn't exist yet or other error, skip quietly
+        pass
+
+    # create an index to speed lookups
+    try:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id)")
+        conn.commit()
+    except Exception:
+        pass
 
 
 def ensure_cart():
@@ -215,19 +264,33 @@ def about():
 def products():
     search = request.args.get('search', '')
     sort = request.args.get('sort', 'newest')
+    category_filter = request.args.get('category', '').strip()
     conn = get_db_connection()
     cur = conn.cursor()
     base = """
      SELECT p.id, p.title, p.description, p.price, p.created_at, 
-         p.stock, p.image_url, u.business_name, u.rating, p.seller_id
+         p.stock, p.image_url, u.business_name, u.rating, p.seller_id,
+         c.name AS category_name, c.slug AS category_slug
         FROM products p 
         LEFT JOIN users u ON p.seller_id = u.id
+        LEFT JOIN categories c ON p.category_id = c.id
     """
     params = []
     where = ""
     if search:
         where = " WHERE p.title LIKE ? OR p.description LIKE ?"
         params.extend([f"%{search}%", f"%{search}%"])
+    # category filter can be a slug or an id
+    if category_filter:
+        if where:
+            where += " AND (c.slug = ? OR p.category_id = ?)"
+        else:
+            where = " WHERE (c.slug = ? OR p.category_id = ?)"
+        params.append(category_filter)
+        try:
+            params.append(int(category_filter))
+        except Exception:
+            params.append(-1)
     if sort == 'price_low':
         order = " ORDER BY p.price ASC"
     elif sort == 'price_high':
@@ -244,11 +307,13 @@ def product_detail(product_id):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT p.id, p.title, p.description, p.price, p.stock, p.image_url,
-               u.id AS seller_id, u.business_name, u.seller_description, u.rating
-        FROM products p
-        LEFT JOIN users u ON p.seller_id = u.id
-        WHERE p.id = ?
+     SELECT p.id, p.title, p.description, p.price, p.stock, p.image_url,
+         u.id AS seller_id, u.business_name, u.seller_description, u.rating,
+         c.name AS category_name, c.slug AS category_slug
+     FROM products p
+     LEFT JOIN users u ON p.seller_id = u.id
+     LEFT JOIN categories c ON p.category_id = c.id
+     WHERE p.id = ?
     """, (product_id,))
     product = cur.fetchone()
     conn.close()
@@ -790,10 +855,102 @@ def admin_seller_application_action(app_id, action):
 def admin_products():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT p.id, p.title, p.price, p.stock, u.username AS seller FROM products p LEFT JOIN users u ON p.seller_id = u.id ORDER BY p.created_at DESC")
+    cur.execute("SELECT p.id, p.title, p.price, p.stock, u.username AS seller, c.name AS category FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.created_at DESC")
     products = cur.fetchall()
     conn.close()
     return render_template('admin/products.html', products=products)
+
+
+@app.route('/admin/categories')
+@admin_required
+def admin_categories():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, slug, description, created_at FROM categories ORDER BY name")
+    categories = cur.fetchall()
+    conn.close()
+    return render_template('admin/categories.html', categories=categories)
+
+
+def _slugify(name: str) -> str:
+    # simple slugifier: lowercase, replace spaces with hyphens, remove basic unsafe chars
+    if not name:
+        return ''
+    s = name.strip().lower()
+    s = s.replace(' ', '-')
+    # strip characters other than alphanum, hyphen, underscore
+    return ''.join(ch for ch in s if ch.isalnum() or ch in ('-', '_'))
+
+
+@app.route('/admin/categories/new', methods=['GET', 'POST'])
+@admin_required
+def admin_category_new():
+    if request.method == 'POST':
+        name = request.form.get('name','').strip()
+        slug = request.form.get('slug','').strip() or _slugify(name)
+        description = request.form.get('description','').strip() or None
+        if not name:
+            flash('Category name required.')
+            return redirect(url_for('admin_category_new'))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("INSERT INTO categories (name, slug, description) VALUES (?, ?, ?)", (name, slug, description))
+            conn.commit()
+            flash('Category created.')
+            return redirect(url_for('admin_categories'))
+        except sqlite3.IntegrityError:
+            flash('Category name or slug already exists.')
+            conn.close()
+            return redirect(url_for('admin_category_new'))
+    return render_template('admin/category_form.html', category=None)
+
+
+@app.route('/admin/categories/<int:cat_id>/edit', methods=['GET', 'POST'])
+@admin_required
+def admin_category_edit(cat_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, slug, description FROM categories WHERE id = ?", (cat_id,))
+    cat = cur.fetchone()
+    if not cat:
+        conn.close()
+        flash('Category not found.')
+        return redirect(url_for('admin_categories'))
+    if request.method == 'POST':
+        name = request.form.get('name','').strip()
+        slug = request.form.get('slug','').strip() or _slugify(name)
+        description = request.form.get('description','').strip() or None
+        if not name:
+            flash('Category name required.')
+            conn.close()
+            return redirect(url_for('admin_category_edit', cat_id=cat_id))
+        try:
+            cur.execute("UPDATE categories SET name = ?, slug = ?, description = ? WHERE id = ?", (name, slug, description, cat_id))
+            conn.commit()
+            flash('Category updated.')
+            conn.close()
+            return redirect(url_for('admin_categories'))
+        except sqlite3.IntegrityError:
+            flash('Category name or slug already exists.')
+            conn.close()
+            return redirect(url_for('admin_category_edit', cat_id=cat_id))
+    conn.close()
+    return render_template('admin/category_form.html', category=cat)
+
+
+@app.route('/admin/categories/<int:cat_id>/delete', methods=['POST'])
+@admin_required
+def admin_category_delete(cat_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # disassociate products from this category
+    cur.execute("UPDATE products SET category_id = NULL WHERE category_id = ?", (cat_id,))
+    cur.execute("DELETE FROM categories WHERE id = ?", (cat_id,))
+    conn.commit()
+    conn.close()
+    flash('Category deleted (products unassigned).')
+    return redirect(url_for('admin_categories'))
 
 @app.route('/admin/products/new', methods=['GET', 'POST'])
 @admin_required
@@ -804,21 +961,45 @@ def admin_product_new():
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
         seller_id = request.form.get('seller_id') or None
+        category_id = request.form.get('category_id') or None
+        if category_id == '':
+            category_id = None
+        else:
+            try:
+                category_id = int(category_id)
+            except Exception:
+                category_id = None
         # optional image filename/URL provided by admin
         image_url = request.form.get('image_url','').strip() or None
         if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
             # treat bare filenames as files placed under /static/img/
             image_url = f"/static/img/{image_url}"
+        # Validate price
         try:
             price_val = float(price)
-            stock_val = int(stock)
         except ValueError:
-            flash("Invalid price or stock.")
+            flash("Invalid price.")
             return redirect(url_for('admin_product_new'))
+
+        # Validate stock: allow blank meaning NULL (unlimited). Otherwise parse int and bounds-check.
+        stock_val = None
+        stock_raw = stock
+        if stock_raw != '':
+            try:
+                stock_val = int(stock_raw)
+            except ValueError:
+                flash("Invalid stock value.")
+                return redirect(url_for('admin_product_new'))
+            if stock_val < 0:
+                flash("Stock cannot be negative. Use empty value for unlimited.")
+                return redirect(url_for('admin_product_new'))
+            if stock_val > MAX_SQLITE_INT:
+                flash(f"Stock value too large. Maximum allowed is {MAX_SQLITE_INT}.")
+                return redirect(url_for('admin_product_new'))
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url) VALUES (?, ?, ?, ?, ?, ?)",
-                    (seller_id, title, description, price_val, stock_val, image_url))
+        cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (seller_id, title, description, price_val, stock_val, image_url, category_id))
         conn.commit()
         conn.close()
         flash("Product created.")
@@ -828,8 +1009,10 @@ def admin_product_new():
     cur = conn.cursor()
     cur.execute("SELECT id, username FROM users ORDER BY username")
     sellers = cur.fetchall()
+    cur.execute("SELECT id, name FROM categories ORDER BY name")
+    categories = cur.fetchall()
     conn.close()
-    return render_template('admin/product_form.html', sellers=sellers, product=None)
+    return render_template('admin/product_form.html', sellers=sellers, product=None, categories=categories)
 
 @app.route('/admin/products/<int:product_id>/edit', methods=['GET', 'POST'])
 @admin_required
@@ -848,23 +1031,47 @@ def admin_product_edit(product_id):
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
         seller_id = request.form.get('seller_id') or None
+        category_id = request.form.get('category_id') or None
+        if category_id == '':
+            category_id = None
+        else:
+            try:
+                category_id = int(category_id)
+            except Exception:
+                category_id = None
+        # Validate price
         try:
             price_val = float(price)
-            stock_val = int(stock)
         except ValueError:
-            flash("Invalid price or stock.")
+            flash("Invalid price.")
             return redirect(url_for('admin_product_edit', product_id=product_id))
+
+        # Validate stock
+        stock_val = None
+        stock_raw = stock
+        if stock_raw != '':
+            try:
+                stock_val = int(stock_raw)
+            except ValueError:
+                flash("Invalid stock value.")
+                return redirect(url_for('admin_product_edit', product_id=product_id))
+            if stock_val < 0:
+                flash("Stock cannot be negative. Use empty value for unlimited.")
+                return redirect(url_for('admin_product_edit', product_id=product_id))
+            if stock_val > MAX_SQLITE_INT:
+                flash(f"Stock value too large. Maximum allowed is {MAX_SQLITE_INT}.")
+                return redirect(url_for('admin_product_edit', product_id=product_id))
         # optional image filename/URL provided by admin
         image_url = request.form.get('image_url','').strip() or None
         if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
             image_url = f"/static/img/{image_url}"
 
         if image_url is not None:
-            cur.execute("UPDATE products SET seller_id = ?, title = ?, description = ?, price = ?, stock = ?, image_url = ? WHERE id = ?",
-                (seller_id, title, description, price_val, stock_val, image_url, product_id))
+            cur.execute("UPDATE products SET seller_id = ?, title = ?, description = ?, price = ?, stock = ?, image_url = ?, category_id = ? WHERE id = ?",
+                (seller_id, title, description, price_val, stock_val, image_url, category_id, product_id))
         else:
-            cur.execute("UPDATE products SET seller_id = ?, title = ?, description = ?, price = ?, stock = ? WHERE id = ?",
-                (seller_id, title, description, price_val, stock_val, product_id))
+            cur.execute("UPDATE products SET seller_id = ?, title = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?",
+                (seller_id, title, description, price_val, stock_val, category_id, product_id))
         conn.commit()
         conn.close()
         flash("Product updated.")
@@ -872,8 +1079,10 @@ def admin_product_edit(product_id):
     # GET form
     cur.execute("SELECT id, username FROM users ORDER BY username")
     sellers = cur.fetchall()
+    cur.execute("SELECT id, name FROM categories ORDER BY name")
+    categories = cur.fetchall()
     conn.close()
-    return render_template('admin/product_form.html', product=product, sellers=sellers)
+    return render_template('admin/product_form.html', product=product, sellers=sellers, categories=categories)
 
 @app.route('/admin/products/<int:product_id>/delete', methods=['POST'])
 @admin_required
@@ -933,26 +1142,57 @@ def seller_product_new():
         description = request.form.get('description','').strip()
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
-        # optional image filename/URL provided by seller
+    # optional image filename/URL provided by seller
         image_url = request.form.get('image_url','').strip() or None
         if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
             image_url = f"/static/img/{image_url}"
+        # Validate price
         try:
             price_val = float(price)
-            stock_val = int(stock)
         except ValueError:
-            flash("Invalid price or stock.")
+            flash("Invalid price.")
             return redirect(url_for('seller_product_new'))
+
+        # Validate stock: blank means unlimited (NULL)
+        stock_val = None
+        stock_raw = stock
+        if stock_raw != '':
+            try:
+                stock_val = int(stock_raw)
+            except ValueError:
+                flash("Invalid stock value.")
+                return redirect(url_for('seller_product_new'))
+            if stock_val < 0:
+                flash("Stock cannot be negative. Use empty value for unlimited.")
+                return redirect(url_for('seller_product_new'))
+            if stock_val > MAX_SQLITE_INT:
+                flash(f"Stock value too large. Maximum allowed is {MAX_SQLITE_INT}.")
+                return redirect(url_for('seller_product_new'))
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url) VALUES (?, ?, ?, ?, ?, ?)",
-                    (uid, title, description, price_val, stock_val, image_url))
+        category_id = request.form.get('category_id') or None
+        if category_id == '':
+            category_id = None
+        else:
+            try:
+                category_id = int(category_id)
+            except Exception:
+                category_id = None
+
+        cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (uid, title, description, price_val, stock_val, image_url, category_id))
         conn.commit()
         conn.close()
         flash("Product created.")
         return redirect(url_for('seller_dashboard'))
 
-    return render_template('seller/product_form.html', product=None)
+    # GET: supply categories to select
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM categories ORDER BY name")
+    categories = cur.fetchall()
+    conn.close()
+    return render_template('seller/product_form.html', product=None, categories=categories)
 
 
 # Seller: edit product
@@ -982,26 +1222,54 @@ def seller_product_edit(product_id):
         image_url = request.form.get('image_url','').strip() or None
         if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
             image_url = f"/static/img/{image_url}"
+        # Validate price
         try:
             price_val = float(price)
-            stock_val = int(stock)
         except ValueError:
-            flash("Invalid price or stock.")
+            flash("Invalid price.")
             return redirect(url_for('seller_product_edit', product_id=product_id))
 
-        if image_url is not None:
-            cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, image_url = ? WHERE id = ?",
-                        (title, description, price_val, stock_val, image_url, product_id))
+        # Validate stock
+        stock_val = None
+        stock_raw = stock
+        if stock_raw != '':
+            try:
+                stock_val = int(stock_raw)
+            except ValueError:
+                flash("Invalid stock value.")
+                return redirect(url_for('seller_product_edit', product_id=product_id))
+            if stock_val < 0:
+                flash("Stock cannot be negative. Use empty value for unlimited.")
+                return redirect(url_for('seller_product_edit', product_id=product_id))
+            if stock_val > MAX_SQLITE_INT:
+                flash(f"Stock value too large. Maximum allowed is {MAX_SQLITE_INT}.")
+                return redirect(url_for('seller_product_edit', product_id=product_id))
+
+        category_id = request.form.get('category_id') or None
+        if category_id == '':
+            category_id = None
         else:
-            cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ? WHERE id = ?",
-                        (title, description, price_val, stock_val, product_id))
+            try:
+                category_id = int(category_id)
+            except Exception:
+                category_id = None
+
+        if image_url is not None:
+            cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, image_url = ?, category_id = ? WHERE id = ?",
+                        (title, description, price_val, stock_val, image_url, category_id, product_id))
+        else:
+            cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?",
+                        (title, description, price_val, stock_val, category_id, product_id))
         conn.commit()
         conn.close()
         flash('Product updated.')
         return redirect(url_for('seller_dashboard'))
 
+    # GET: include categories for select
+    cur.execute("SELECT id, name FROM categories ORDER BY name")
+    categories = cur.fetchall()
     conn.close()
-    return render_template('seller/product_form.html', product=product)
+    return render_template('seller/product_form.html', product=product, categories=categories)
 
 
 # Seller: delete product
