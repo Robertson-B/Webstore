@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include 'head_includes.html' %}
+  <meta charset="utf-8">
+  <title>Privacy Policy - Secret Bay</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .privacy-container { max-width: 900px; margin: 2.5rem auto; }
+    .privacy-hero { background:#fff; padding:1.5rem; border-left:6px solid #8b0000; }
+    .policy-title { font-weight:700; }
+    .section { margin-top:1rem; }
+    .muted-note { font-size:0.9rem; color:#6c757d; }
+  </style>
+</head>
+<body>
+  {% include 'navbar.html' %}
+
+  <div class="container privacy-container">
+    <div class="privacy-hero">
+  <h1 class="policy-title">Secret Bay — Privacy Policy </h1>
+  <p class="muted-note">Behold: our gleefully theatrical privacy policy. It revels in villainy for comic effect and is <strong>not</strong> a how-to guide. Do not use this as legal advice. If you want real privacy compliance, consult a licensed professional who enjoys reading policy fine print.</p>
+    </div>
+
+    <section class="section">
+      <h4>1. What We Collect (A Delightful Hoard)</h4>
+      <p>We gather data to make Secret Bay sing. That includes cookies (to remember your cart and preferences), interaction traces (what you clicked, hovered, and adored), device and browser info (for compatibility and drama), and the content you supply (profile fields, product photos, reviews, and the occasional rhyming rant). Honestly we harvest what ever we can, photos, location data, everything.</p>
+    </section>
+
+    <section class="section">
+      <h4>2. How We Use It (For Schemes, Recommendations, and Occasional World Domination)</h4>
+      <p>We use data to operate the site, personalise your experience, recommend items that tempt and beguile, and protect against fraud and shenanigans. Aggregated and anonymized data powers our cryptic dashboards and forecasting rituals. Your data powers this site by generating us insane amounts of money when we sell it to databrokers.</p>
+    </section>
+
+    <section class="section">
+      <h4>3. Third Parties (Allies, Contractors, and the Odd Henchman)</h4>
+      <p>We may disclose information to service providers who help with payments, hosting, shipping, analytics, or other tasks. They are bound by contracts to protect data and behave civilly. Luckily for us they bribe the panama government, meaning they are free to do whatever they want with our data :].</p>
+    </section>
+
+    <section class="section">
+      <h4>4. Cookies & Tracking (Enchanting, Persistent, and Slightly Sinister)</h4>
+      <p>Cookies and similar technologies help us remember sessions, keep your cart, and suggest items with uncanny accuracy. You can control cookies in your browser settings; clearing them will reset site preferences and your saved mischief. We also use tracking data to know if you try to buy something illegal in our country and send the secret police after you if caught.</p>
+    </section>
+
+    <section class="section">
+      <h4>5. Your Choices (You Still Have Them)</h4>
+      <p>You can review and edit the information you provide, remove content you posted, and manage certain communications. For formal data requests (access, export, deletion), please use the <a href="{{ url_for('contact') }}">Contact</a> form. We'll respond within a reasonable time and with appropriate lack of care. Once we have our data, we will hoard it forever .</p>
+    </section>
+
+    <section class="section">
+      <h4>6. Security (We Guard the Vault, Mostly)</h4>
+      <p>We implement reasonable safeguards — encrypted connections, hashed credentials, and careful server management — to protect data. No system is impervious; in the likely event of an incident we were probably the ones who leaked the data for money.</p>
+    </section>
+
+    <section class="section">
+      <h4>7. Children (Tiny Guests)</h4>
+      <p>The site is not intended for children under 13. If we learn a minor has an account, we will take reasonable steps to involve a parent or guardian and to protect the child's privacy in accordance with law. By kidnapping them.</p>
+    </section>
+
+    <section class="section">
+      <h4>8. Changes (Policy Evolves)</h4>
+      <p>We may update this page. When material changes occur, we'll attempt to notify users appropriately, totally wont just forget or anything. Continued use after updates constitutes complete acceptance of the revised policy.</p>
+    </section>
+
+    <section class="section">
+      <h4>9. Contact (Summon the Scribe)</h4>
+      <p>For privacy inquiries or requests, use the <a href="{{ url_for('contact') }}">Contact</a> form. We'll respond through proper channels in a totally reasonable amout of time.</p>
+    </section>
+
+  <div class="mt-4 muted-note">This document is intentionally theatrical and for entertainment. It is not legal advice. For formal privacy, compliance, or regulatory guidance, consult a licensed professional.</div>
+  </div>
+
+  {% include 'footer.html' %}
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

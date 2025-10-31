@@ -1,6 +1,9 @@
 <nav class="navbar navbar-expand-lg navbar-light bg-white mb-3" aria-label="Main navigation">
   <div class="container">
-    <a class="navbar-brand" href="/">Secret Bay</a>
+    <a class="navbar-brand d-flex align-items-center" href="{{ url_for('index') }}">
+      <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Secret Bay logo" height="32" class="me-2" style="width:auto;">
+      <span>Secret Bay</span>
+    </a>
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
       <span class="navbar-toggler-icon"></span>
@@ -10,6 +13,9 @@
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
         <li class="nav-item"><a class="nav-link" href="/about">About</a></li>
   <li class="nav-item"><a class="nav-link" href="/products">Browse</a></li>
+        {% if current_user_is_seller %}
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('seller_dashboard') }}">Seller Dashboard</a></li>
+        {% endif %}
         {% if current_user_is_admin %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_index') }}">Admin</a></li>
         {% endif %}
@@ -50,3 +56,11 @@
     }).catch(()=>{});
   });
 </script>
+
+<style>
+  /* Small navbar-brand image sizing to keep markup portable across templates */
+  .navbar-brand img { height: 32px; width: auto; display: inline-block; vertical-align: middle; }
+</style>
+
+<!-- open a site-content wrapper so footer can push to bottom via flexbox -->
+<main class="site-content">

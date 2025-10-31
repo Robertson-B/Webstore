@@ -1,0 +1,46 @@
+</main>
+<footer class="site-footer mt-5" role="contentinfo">
+  <!-- full-width footer background -->
+  <div class="site-footer-bg">
+    <div class="container">
+  <div class="row align-items-center py-2">
+        <div class="col-md-8 links d-flex flex-wrap align-items-center gap-2 small">
+          <a href="/terms" class="footer-link">Terms of Service</a>
+          <span class="separator">|</span>
+          <a href="/privacy" class="footer-link">Privacy Policy</a>
+          <span class="separator">|</span>
+          <a href="/cookies" class="footer-link">Cookie Policy</a>
+          <span class="separator">|</span>
+          <a href="/returns" class="footer-link">Return Policy</a>
+        </div>
+        <div class="col-md-4 text-md-end d-flex align-items-center justify-content-md-end gap-3">
+          <a href="{{ contact_url }}" class="btn btn-outline-primary btn-sm">Contact Us</a>
+          <div class="small copyright">© 2025-{{ current_year }} BitRealm Games. All rights reserved.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<style>
+  /* Make the page a column flex so footer can sit at the bottom when content is short */
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; min-height: 100vh; }
+
+  /* content area should expand to push footer down */
+  .site-content { flex: 1 0 auto; }
+
+  /* Footer spans full width and uses site theme colors; margin-top:auto keeps it at bottom */
+  .site-footer { width:100%; margin-top: auto; }
+  /* use site palette: light background with primary accent; reduced padding for slimmer footer */
+  .site-footer-bg { background: #f7f7f7; color: #2c3e50; border-top: 4px solid #00a87e; padding-top: 0.5rem; padding-bottom: 0.5rem; }
+  .site-footer .container { max-width: 1200px; }
+  .site-footer .footer-link { color: #2c3e50; text-decoration: none; margin-right: 0.25rem; font-size: 0.95rem; }
+  .site-footer .footer-link:hover { color: #007b60; text-decoration: underline; }
+  .site-footer .separator { color: rgba(44,62,80,0.35); margin: 0 0.25rem; }
+  .site-footer .copyright { color: rgba(44,62,80,0.65); font-size: 0. ninerem; }
+  @media (max-width: 767px) {
+    .site-footer .col-md-4 { margin-top: 0.5rem; justify-content: flex-start !important; }
+    .site-footer .text-md-end { text-align: left !important; }
+  }
+</style>

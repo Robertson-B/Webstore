@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, send_from_directory
 from functools import wraps
 import sqlite3
 import os
 from decimal import Decimal
+from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
@@ -19,10 +20,57 @@ def get_db_connection(path=DB_PATH):
     return conn
 
 
+@app.route('/favicon.ico')
+def favicon():
+    """Serve the generated favicon.ico for clients that request /favicon.ico directly."""
+    favicon_dir = os.path.join(app.root_path, 'static', 'img', 'favicon')
+    return send_from_directory(favicon_dir, 'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+
+@app.route('/contact', methods=['GET', 'POST'])
+def contact():
+    """Simple contact form: accepts submissions but does not store them.
+    We flash a thank-you message and redirect back to the same page.
+    """
+    if request.method == 'POST':
+        # read fields but intentionally do not persist
+        name = request.form.get('name','').strip()
+        email = request.form.get('email','').strip()
+        subject = request.form.get('subject','').strip()
+        message = request.form.get('message','').strip()
+        # we could log or send to an external service here; for now just acknowledge
+        flash('Thanks for your message — we will get back to you soon.')
+        return redirect(url_for('contact'))
+    return render_template('contact.html')
+
+
+@app.route('/terms')
+def terms():
+    return render_template('terms.html')
+
+
+@app.route('/privacy')
+def privacy():
+    """Serve the playful privacy policy page."""
+    return render_template('privacy.html')
+
+
+@app.route('/cookies')
+def cookies():
+    """Serve the cartoonish cookies policy page."""
+    return render_template('cookies.html')
+
+
+@app.route('/returns')
+def returns_policy():
+    """Serve the theatrical returns & refunds policy page."""
+    return render_template('returns.html')
+
+
 def ensure_seller_applications_table(conn):
     """Ensure the seller_applications table exists and has the expected columns.
     Adds a `status` column if it's missing to support approve/reject flows.
-    """
+    """ 
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS seller_applications (
@@ -88,17 +136,39 @@ def inject_user_permissions():
     """
     uid = session.get('user_id')
     is_admin_flag = False
+    is_seller_flag = False
     if uid:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT username, is_admin FROM users WHERE id = ?", (uid,))
+        cur.execute("SELECT username, is_admin, is_seller FROM users WHERE id = ?", (uid,))
         u = cur.fetchone()
         conn.close()
         if u:
             allowed_admin_username = 'Bean'
             if (u['username'] and u['username'].strip().lower() == allowed_admin_username.strip().lower()) or u['is_admin']:
                 is_admin_flag = True
-    return {'current_user_is_admin': is_admin_flag}
+            # expose seller flag to templates so navbar can show a Seller Dashboard link
+            try:
+                is_seller_flag = bool(u['is_seller'])
+            except Exception:
+                is_seller_flag = False
+    # resolve a sensible contact URL for the footer: prefer seller_contact, then contact endpoint, else a fallback path
+    contact_url = '/contact'
+    try:
+        if 'seller_contact' in app.view_functions:
+            contact_url = url_for('seller_contact')
+        elif 'contact' in app.view_functions:
+            contact_url = url_for('contact')
+    except Exception:
+        # fallback to a static path if url_for fails for any reason
+        contact_url = '/contact'
+
+    return {
+        'current_user_is_admin': is_admin_flag,
+        'current_user_is_seller': is_seller_flag,
+        'current_year': datetime.now().year,
+        'contact_url': contact_url,
+    }
 
 def admin_required(f):
     @wraps(f)
@@ -815,6 +885,148 @@ def admin_product_delete(product_id):
     conn.close()
     flash("Product deleted.")
     return redirect(url_for('admin_products'))
+
+
+# Seller-only decorator
+def seller_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        uid = session.get('user_id')
+        if not uid:
+            return redirect(url_for('login', next=request.path))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT is_seller FROM users WHERE id = ?", (uid,))
+        u = cur.fetchone()
+        conn.close()
+        if not (u and u['is_seller']):
+            flash('Seller access required.')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated
+
+
+# Seller dashboard: list seller's products
+@app.route('/seller/dashboard')
+@login_required
+@seller_required
+def seller_dashboard():
+    uid = session.get('user_id')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, business_name, seller_description, logo_url FROM users WHERE id = ?", (uid,))
+    seller = cur.fetchone()
+    cur.execute("SELECT id, title, price, stock, created_at, image_url FROM products WHERE seller_id = ? ORDER BY created_at DESC", (uid,))
+    products = cur.fetchall()
+    conn.close()
+    return render_template('seller/products.html', seller=seller, products=products)
+
+
+# Seller: add new product
+@app.route('/seller/products/new', methods=['GET', 'POST'])
+@login_required
+@seller_required
+def seller_product_new():
+    uid = session.get('user_id')
+    if request.method == 'POST':
+        title = request.form.get('title','').strip()
+        description = request.form.get('description','').strip()
+        price = request.form.get('price','0').strip()
+        stock = request.form.get('stock','0').strip()
+        # optional image filename/URL provided by seller
+        image_url = request.form.get('image_url','').strip() or None
+        if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
+            image_url = f"/static/img/{image_url}"
+        try:
+            price_val = float(price)
+            stock_val = int(stock)
+        except ValueError:
+            flash("Invalid price or stock.")
+            return redirect(url_for('seller_product_new'))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url) VALUES (?, ?, ?, ?, ?, ?)",
+                    (uid, title, description, price_val, stock_val, image_url))
+        conn.commit()
+        conn.close()
+        flash("Product created.")
+        return redirect(url_for('seller_dashboard'))
+
+    return render_template('seller/product_form.html', product=None)
+
+
+# Seller: edit product
+@app.route('/seller/products/<int:product_id>/edit', methods=['GET', 'POST'])
+@login_required
+@seller_required
+def seller_product_edit(product_id):
+    uid = session.get('user_id')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+    product = cur.fetchone()
+    if not product:
+        conn.close()
+        flash('Product not found.')
+        return redirect(url_for('seller_dashboard'))
+    if product['seller_id'] != uid:
+        conn.close()
+        flash('Not authorized to edit this product.')
+        return redirect(url_for('seller_dashboard'))
+
+    if request.method == 'POST':
+        title = request.form.get('title','').strip()
+        description = request.form.get('description','').strip()
+        price = request.form.get('price','0').strip()
+        stock = request.form.get('stock','0').strip()
+        image_url = request.form.get('image_url','').strip() or None
+        if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
+            image_url = f"/static/img/{image_url}"
+        try:
+            price_val = float(price)
+            stock_val = int(stock)
+        except ValueError:
+            flash("Invalid price or stock.")
+            return redirect(url_for('seller_product_edit', product_id=product_id))
+
+        if image_url is not None:
+            cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, image_url = ? WHERE id = ?",
+                        (title, description, price_val, stock_val, image_url, product_id))
+        else:
+            cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ? WHERE id = ?",
+                        (title, description, price_val, stock_val, product_id))
+        conn.commit()
+        conn.close()
+        flash('Product updated.')
+        return redirect(url_for('seller_dashboard'))
+
+    conn.close()
+    return render_template('seller/product_form.html', product=product)
+
+
+# Seller: delete product
+@app.route('/seller/products/<int:product_id>/delete', methods=['POST'])
+@login_required
+@seller_required
+def seller_product_delete(product_id):
+    uid = session.get('user_id')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT seller_id FROM products WHERE id = ?", (product_id,))
+    p = cur.fetchone()
+    if not p:
+        conn.close()
+        flash('Product not found.')
+        return redirect(url_for('seller_dashboard'))
+    if p['seller_id'] != uid:
+        conn.close()
+        flash('Not authorized to delete this product.')
+        return redirect(url_for('seller_dashboard'))
+    cur.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    conn.commit()
+    conn.close()
+    flash('Product deleted.')
+    return redirect(url_for('seller_dashboard'))
 
 # User management
 @app.route('/admin/users')

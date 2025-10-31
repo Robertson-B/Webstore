@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include 'head_includes.html' %}
+  <meta charset="utf-8">
+  <title>Terms of Service - Secret Bay</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .terms-container { max-width: 900px; margin: 2.5rem auto; }
+    .terms-hero { background:#fff; padding:1.5rem; border-left:6px solid #00a87e; }
+    .term-title { font-weight:700; }
+    .clause { margin-top:1rem; }
+    .muted-note { font-size:0.9rem; color:#6c757d; }
+  </style>
+</head>
+<body>
+  {% include 'navbar.html' %}
+
+  <div class="container terms-container">
+    <div class="terms-hero">
+      <h1 class="term-title">Secret Bay — Terms of Service </h1>
+      <p class="muted-note">This page is intentionally biased, melodramatic, and written in a comedic, one-sided style for entertainment purposes. It is not legal advice. If you want real legal terms, please consult an actual lawyer who is not a cartoon.</p>
+    </div>
+
+    <section class="clause">
+      <h4>1. Acceptance (You Are Definitely Accepting)</h4>
+      <p>By clicking around Secret Bay, using the site, or even thinking fond thoughts about our logo, you irrevocably, unilaterally, and joyfully accept every part of these Terms forever and ever. There's no take-backsies.</p>
+    </section>
+
+    <section class="clause">
+      <h4>2. Our Rights (All the Rights)</h4>
+      <p>We reserve the right to do literally anything reasonable and whimsical with content posted on the site — including but not limited to: turning it into interpretive dance, minting commemorative trading cards, selling it to benevolent extraterrestrials, or featuring it in our annual calendar. We also reserve the right to change the site, the name of the site, the color palette, and your mind.</p>
+    </section>
+
+    <section class="clause">
+      <h4>3. Your Obligations (Tiny)</h4>
+      <p>You agree to be mostly decent. You will not attempt to hack our servers with spoons, mislead other users about your cat's credentials, or sell things you found under questionable lighting. If you do any of the above, we will sigh dramatically and possibly remove your listing.</p>
+    </section>
+
+    <section class="clause">
+      <h4>4. Fees & Taxes (We Keep the Gold)</h4>
+      <p>All fees are payable in the currency of us being extremely grateful. If any fees apply, they will be displayed in the checkout process alongside a glittering animation. Taxes are your responsibility; if tax collectors come knocking, please offer them a brochure and let us know so we can applaud your civic engagement.</p>
+    </section>
+
+    <section class="clause">
+      <h4>5. Warranties (We Promise Very Little)</h4>
+      <p>The site is provided "as is" and "with a wink." We make no promises that the site will be fit for making you a sandwich, teleporting packages, or predicting fashion trends. Any implied warranties are hereby politely declined.</p>
+    </section>
+
+    <section class="clause">
+      <h4>6. Limitation of Liability (Short Version)</h4>
+      <p>In no event will Secret Bay, its employees, mascots, or the office ficus be liable for any special, indirect, incidental, or purely hypothetical damages, including but not limited to: loss of sleep, missed naps, spilled beverages, or emotional distress caused by clicking "Buy" too quickly.</p>
+    </section>
+
+    <section class="clause">
+      <h4>7. Termination (We Can And Will)</h4>
+      <p>We may terminate your account for any reason, including but not limited to: using too many exclamation points, being unreasonably charming, or failing to appreciate our jokes. On termination, you may or may not receive a cookie. Acceptable reasons for termination will be chosen by a committee of one.</p>
+    </section>
+
+    <section class="clause">
+      <h4>8. Governing Law (In Case of Disagreements)</h4>
+      <p>These terms shall be governed by the laws of Imagination, applicable only when both parties agree and perform a ceremonial dance. Otherwise, standard laws of your jurisdiction apply and neither party waives any real rights by reading this page — except perhaps the right to remain dull.</p>
+    </section>
+
+    <section class="clause">
+      <h4>9. Changes to Terms</h4>
+      <p>We may change these Terms at any time. Major changes will be announced using interpretive smoke signals and small changes will be made silently at 3am. Continued use of the site after changes means you accept them, especially if accompanied by confetti.</p>
+    </section>
+
+    <section class="clause">
+      <h4>10. Contact</h4>
+      <p>If you have questions or would like to petition for a change, please use the <a href="{{ url_for('contact') }}">Contact Us</a> form. We will review your request between naps and coffee breaks.</p>
+    </section>
+
+    <div class="mt-4 muted-note">Again: This page is playful and intentionally one-sided. It is not a substitute for proper legal terms. If you need real legal terms, consult a licensed attorney.</div>
+  </div>
+
+  {% include 'footer.html' %}
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

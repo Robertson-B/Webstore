@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include 'head_includes.html' %}
+  <meta charset="utf-8">
+  <title>Cookies Policy - Secret Bay</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .cookies-container { max-width: 900px; margin: 2.5rem auto; }
+    .cookies-hero { background:#fff; padding:1.5rem; border-left:6px solid #8b0000; }
+    .policy-title { font-weight:700; }
+    .section { margin-top:1rem; }
+    .muted-note { font-size:0.9rem; color:#6c757d; }
+  </style>
+</head>
+<body>
+  {% include 'navbar.html' %}
+
+  <div class="container cookies-container">
+    <div class="cookies-hero">
+      <h1 class="policy-title">Secret Bay — Cookies Policy </h1>
+      <p class="muted-note">This page is theatrical and playful — a cartoonish take on cookies. It is not legal advice. For formal guidance on cookies, tracking, or compliance (GDPR/CCPA), consult a qualified privacy professional.</p>
+    </div>
+
+    <section class="section">
+      <h4>1. What Are Cookies?</h4>
+      <p>Cookies are tiny, friendly data crumbs we place in your browser to remember things about your visit — your cart, your preference for the "mystery plushie" filter, or whether you laughed at the mascot's hat. They are not actual snacks (do not attempt to eat them).</p>
+    </section>
+
+    <section class="section">
+      <h4>2. Types of Cookies We Use</h4>
+      <ul>
+        <li><strong>Essential cookies</strong>: Keep the lights on — session cookies that enable cart functionality, logins, and secure pages.</li>
+        <li><strong>Preference cookies</strong>: Remember your settings (theme, sort order, avatar allegiance).</li>
+        <li><strong>Analytics cookies</strong>: Help us understand what parts of the site people adore so we can improve the experience (and the jokes).</li>
+        <li><strong>Advertising cookies</strong>: Deliver fun and relevant recommendations. We try not to be spooky with these.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h4>3. Why We Use Cookies (Mostly Benevolent)</h4>
+      <p>Cookies let the site behave properly, remember your cart, and show you things you might actually want. Analytics cookies help us spot bugs, discover popular items, and craft better puns. Advertising cookies help us suggest things that tempt you — responsibly, we promise (this is satire).</p>
+    </section>
+
+    <section class="section">
+      <h4>4. Your Choices</h4>
+      <p>You can control cookies through your browser settings. Clearing or blocking cookies may make parts of the site forget your preferences or not work as intended. If you want to limit tracking, use your browser's privacy controls or opt out using any vendor-specific links provided with personalized ads.</p>
+    </section>
+
+    <section class="section">
+      <h4>5. Third-Party Cookies</h4>
+      <p>Some cookies come from third parties (for analytics, payments, or related services). These third parties have their own cookie policies and we recommend reviewing them if you want the full parade of details.</p>
+    </section>
+
+    <section class="section">
+      <h4>6. How Long Cookies Last</h4>
+      <p>Some cookies vanish when you close your browser (session cookies). Others linger for months to remember your quirks. The exact lifespan depends on the cookie type and purpose.</p>
+    </section>
+
+    <section class="section">
+      <h4>7. Questions & Requests</h4>
+      <p>If you have questions about cookies or want to request information about data associated with your account, use the <a href="{{ url_for('contact') }}">Contact</a> page and we'll respond in due course, with appropriate ceremony.</p>
+    </section>
+
+    <div class="mt-4 muted-note">This whimsical cookies policy is for entertainment and clarity. It is not a substitute for legal advice. For compliance requirements, consult a licensed privacy professional.</div>
+  </div>
+
+  {% include 'footer.html' %}
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
