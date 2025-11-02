@@ -82,6 +82,17 @@
     <!-- search moved to navbar -->
 
     <div class="container">
+        <!-- Category menu -->
+        <div class="mb-3">
+            <div class="d-flex flex-wrap gap-2">
+                <a href="{{ url_for('products', search=search, sort=sort) }}" class="btn btn-sm {% if not request.args.get('category') %}btn-primary{% else %}btn-outline-secondary{% endif %}">All</a>
+                {% if categories %}
+                    {% for c in categories %}
+                        <a href="{{ url_for('products', category=c['slug'], search=search, sort=sort) }}" class="btn btn-sm {% if request.args.get('category')==c['slug'] %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ c['name'] }}</a>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
         <div class="row">
             {% if products %}
                 {% for p in products %}

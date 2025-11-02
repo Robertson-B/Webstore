@@ -25,13 +25,7 @@ def get_db_connection(path=DB_PATH):
 
 
 # Ensure categories table and products.category_id exist on startup (best-effort)
-try:
-    _conn = get_db_connection()
-    ensure_categories_table(_conn)
-    _conn.close()
-except Exception:
-    # If DB isn't yet created or another startup issue occurs, skip; migration will run later when needed
-    pass
+# (moved later — ensure_categories_table is defined below)
 
 
 @app.route('/favicon.ico')
@@ -144,6 +138,17 @@ def ensure_categories_table(conn):
         conn.commit()
     except Exception:
         pass
+
+
+# Call the migration helper on startup (best-effort). This must run after
+# the function is defined so imports won't fail when the module loads.
+try:
+    _conn = get_db_connection()
+    ensure_categories_table(_conn)
+    _conn.close()
+except Exception:
+    # If DB isn't yet created or another startup issue occurs, skip; migration will run later when needed
+    pass
 
 
 def ensure_cart():
@@ -278,7 +283,8 @@ def products():
     params = []
     where = ""
     if search:
-        where = " WHERE p.title LIKE ? OR p.description LIKE ?"
+        # group search terms so additional filters (like category) AND correctly apply
+        where = " WHERE (p.title LIKE ? OR p.description LIKE ?)"
         params.extend([f"%{search}%", f"%{search}%"])
     # category filter can be a slug or an id
     if category_filter:
@@ -299,8 +305,14 @@ def products():
         order = " ORDER BY p.created_at DESC"
     cur.execute(base + where + order, params)
     products = cur.fetchall()
+    # also fetch categories for the category menu (may be empty)
+    try:
+        cur.execute("SELECT id, name, slug FROM categories ORDER BY name")
+        categories = cur.fetchall()
+    except Exception:
+        categories = []
     conn.close()
-    return render_template('products.html', products=products, search=search, sort=sort)
+    return render_template('products.html', products=products, search=search, sort=sort, categories=categories)
 
 @app.route('/product/<int:product_id>')
 def product_detail(product_id):
@@ -961,8 +973,8 @@ def admin_product_new():
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
         seller_id = request.form.get('seller_id') or None
-        category_id = request.form.get('category_id') or None
-        if category_id == '':
+        category_id = request.form.get('category_id')
+        if category_id is None or category_id == '':
             category_id = None
         else:
             try:
@@ -1031,8 +1043,8 @@ def admin_product_edit(product_id):
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
         seller_id = request.form.get('seller_id') or None
-        category_id = request.form.get('category_id') or None
-        if category_id == '':
+        category_id = request.form.get('category_id')
+        if category_id is None or category_id == '':
             category_id = None
         else:
             try:
@@ -1170,8 +1182,8 @@ def seller_product_new():
                 return redirect(url_for('seller_product_new'))
         conn = get_db_connection()
         cur = conn.cursor()
-        category_id = request.form.get('category_id') or None
-        if category_id == '':
+        category_id = request.form.get('category_id')
+        if category_id is None or category_id == '':
             category_id = None
         else:
             try:
@@ -1245,8 +1257,8 @@ def seller_product_edit(product_id):
                 flash(f"Stock value too large. Maximum allowed is {MAX_SQLITE_INT}.")
                 return redirect(url_for('seller_product_edit', product_id=product_id))
 
-        category_id = request.form.get('category_id') or None
-        if category_id == '':
+        category_id = request.form.get('category_id')
+        if category_id is None or category_id == '':
             category_id = None
         else:
             try:
