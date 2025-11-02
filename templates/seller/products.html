@@ -15,6 +15,27 @@
       <a href="{{ url_for('seller_product_new') }}" class="btn btn-success">Add New Product</a>
     </div>
 
+    {% if qty_30 is defined or rev_30 is defined or top_products is defined %}
+      <div class="card my-3">
+        <div class="card-body">
+          <h5>Analytics (last 30 days)</h5>
+          <div class="d-flex gap-4">
+            <div><strong>{{ qty_30 or 0 }}</strong><div class="text-muted">Items sold</div></div>
+            <div><strong>${{ '%.2f'|format(rev_30 or 0.0) }}</strong><div class="text-muted">Revenue</div></div>
+          </div>
+          {% if top_products and top_products|length > 0 %}
+            <hr>
+            <h6>Top products</h6>
+            <ul>
+              {% for tp in top_products %}
+                <li>{{ tp['title'] }} — {{ tp['sold'] or 0 }} sold</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
     <div class="row mt-3">
       {% if products %}
         {% for p in products %}

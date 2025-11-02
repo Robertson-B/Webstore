@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, send_from_directory, Response
 from functools import wraps
 import sqlite3
 import os
@@ -16,6 +16,67 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "webstore.db")
 # SQLite INTEGER is signed 64-bit: range is -(2**63) .. 2**63-1
 # Protect against Python ints larger than the SQLite C type can hold.
 MAX_SQLITE_INT = 2**63 - 1
+
+
+# Simple in-memory TTL cache used for page fragments (product pages, sitemap).
+# This avoids adding external dependencies. Keys and values live in process memory
+# and are suitable for small deployments or demo sites.
+class SimpleCache:
+    def __init__(self):
+        # key -> (expires_ts, value)
+        self._store = {}
+
+    def set(self, key, value, ttl=60):
+        self._store[key] = (datetime.utcnow().timestamp() + ttl, value)
+
+    def get(self, key):
+        v = self._store.get(key)
+        if not v:
+            return None
+        expires, val = v
+        if datetime.utcnow().timestamp() > expires:
+            try:
+                del self._store[key]
+            except Exception:
+                pass
+            return None
+        return val
+
+    def delete(self, key):
+        try:
+            del self._store[key]
+        except KeyError:
+            pass
+
+    def clear(self):
+        self._store.clear()
+
+
+# global simple cache instance
+_cache = SimpleCache()
+
+# Rate limiter (best-effort). Try to import Flask-Limiter dynamically so missing
+# packages don't create static import errors in editors/linters.
+try:
+    import importlib
+    _fl = importlib.import_module('flask_limiter')
+    _fl_util = importlib.import_module('flask_limiter.util')
+    Limiter = getattr(_fl, 'Limiter')
+    get_remote_address = getattr(_fl_util, 'get_remote_address')
+    limiter = Limiter(app, key_func=lambda: session.get('user_id') or get_remote_address(), default_limits=["200 per day", "50 per hour"])
+except Exception:
+    class _NoopLimiter:
+        def limit(self, *args, **kwargs):
+            def _decorator(f):
+                return f
+            return _decorator
+    limiter = _NoopLimiter()
+
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    # Friendly response for rate-limited requests
+    return Response('Too many requests, please try again later.', status=429, mimetype='text/plain')
 
 def get_db_connection(path=DB_PATH):
     conn = sqlite3.connect(path)
@@ -36,6 +97,7 @@ def favicon():
 
 
 @app.route('/contact', methods=['GET', 'POST'])
+@limiter.limit("10 per hour")
 def contact():
     """Simple contact form: accepts submissions but does not store them.
     We flash a thank-you message and redirect back to the same page.
@@ -73,6 +135,70 @@ def cookies():
 def returns_policy():
     """Serve the theatrical returns & refunds policy page."""
     return render_template('returns.html')
+
+
+@app.route('/robots.txt')
+def robots_txt():
+    # prefer to reference sitemap with absolute URL
+    sitemap_url = request.url_root.rstrip('/') + url_for('sitemap_xml')
+    lines = [
+        "User-agent: *",
+        "Disallow: /admin",
+        "Disallow: /admin/",
+        "Disallow: /seller/dashboard",
+        "Disallow: /seller/dashboard/",
+        "Allow: /",
+        f"Sitemap: {sitemap_url}",
+    ]
+    return Response("\n".join(lines) + "\n", mimetype='text/plain')
+
+
+@app.route('/sitemap.xml')
+def sitemap_xml():
+    # Return cached sitemap when possible
+    cached = _cache.get('sitemap_xml')
+    if cached:
+        return Response(cached, mimetype='application/xml')
+
+    base = request.url_root.rstrip('/')
+    urls = []
+    # static pages
+    static_paths = ['/', '/products', '/about', '/contact', '/terms', '/privacy', '/cookies', '/returns']
+    today = datetime.utcnow().date().isoformat()
+    for p in static_paths:
+        urls.append((base + p, today))
+
+    # product pages
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, created_at FROM products WHERE id IS NOT NULL")
+        for r in cur.fetchall():
+            pid = r['id']
+            lastmod = r.get('created_at') or today
+            # normalize to date only if it's a datetime-like string
+            try:
+                lastmod = lastmod.split(' ')[0]
+            except Exception:
+                pass
+            urls.append((f"{base}/product/{pid}", lastmod))
+    except Exception:
+        # if table missing, skip
+        pass
+    conn.close()
+
+    # build XML
+    parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for loc, lastmod in urls:
+        parts.append('  <url>')
+        parts.append(f'    <loc>{loc}</loc>')
+        parts.append(f'    <lastmod>{lastmod}</lastmod>')
+        parts.append('  </url>')
+    parts.append('</urlset>')
+    xml = '\n'.join(parts)
+    # cache sitemap for a short period
+    _cache.set('sitemap_xml', xml, ttl=300)
+    return Response(xml, mimetype='application/xml')
 
 
 def ensure_seller_applications_table(conn):
@@ -140,11 +266,56 @@ def ensure_categories_table(conn):
         pass
 
 
+def ensure_reviews_table(conn):
+    """Create reviews table to store product reviews and moderation status."""
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reviews (
+                id INTEGER PRIMARY KEY,
+                product_id INTEGER NOT NULL,
+                user_id INTEGER,
+                title TEXT,
+                body TEXT,
+                rating INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 5),
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+
+def ensure_products_rating_column(conn):
+    """Ensure products table has a 'rating' REAL column to store aggregated product ratings."""
+    cur = conn.cursor()
+    try:
+        cur.execute("PRAGMA table_info(products)")
+        cols = [r[1] for r in cur.fetchall()]
+        if 'rating' not in cols:
+            cur.execute("ALTER TABLE products ADD COLUMN rating REAL DEFAULT 0.0")
+            conn.commit()
+    except Exception:
+        # if products table doesn't exist yet or other error, skip quietly
+        pass
+
+
 # Call the migration helper on startup (best-effort). This must run after
 # the function is defined so imports won't fail when the module loads.
 try:
     _conn = get_db_connection()
     ensure_categories_table(_conn)
+    try:
+        ensure_reviews_table(_conn)
+    except Exception:
+        pass
+    try:
+        ensure_products_rating_column(_conn)
+    except Exception:
+        pass
     _conn.close()
 except Exception:
     # If DB isn't yet created or another startup issue occurs, skip; migration will run later when needed
@@ -269,6 +440,13 @@ def about():
 def products():
     search = request.args.get('search', '')
     sort = request.args.get('sort', 'newest')
+    # pagination
+    try:
+        page = int(request.args.get('page', 1))
+    except Exception:
+        page = 1
+    if page < 1:
+        page = 1
     category_filter = request.args.get('category', '').strip()
     conn = get_db_connection()
     cur = conn.cursor()
@@ -303,7 +481,23 @@ def products():
         order = " ORDER BY p.price DESC"
     else:
         order = " ORDER BY p.created_at DESC"
-    cur.execute(base + where + order, params)
+    # compute total count for pagination (reuse same WHERE params)
+    try:
+        count_sql = "SELECT COUNT(*) AS cnt FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id" + where
+        cur.execute(count_sql, params)
+        total_count = cur.fetchone()['cnt'] or 0
+    except Exception:
+        total_count = 0
+
+    page_size = 24
+    total_pages = max(1, (int(total_count) + page_size - 1) // page_size)
+    if page > total_pages:
+        page = total_pages
+
+    offset = (page - 1) * page_size
+    main_sql = base + where + order + " LIMIT ? OFFSET ?"
+    main_params = list(params) + [page_size, offset]
+    cur.execute(main_sql, main_params)
     products = cur.fetchall()
     # also fetch categories for the category menu (may be empty)
     try:
@@ -312,7 +506,7 @@ def products():
     except Exception:
         categories = []
     conn.close()
-    return render_template('products.html', products=products, search=search, sort=sort, categories=categories)
+    return render_template('products.html', products=products, search=search, sort=sort, categories=categories, page=page, total_pages=total_pages, page_size=page_size, total_count=total_count)
 
 @app.route('/product/<int:product_id>')
 def product_detail(product_id):
@@ -332,7 +526,74 @@ def product_detail(product_id):
     if product is None:
         flash("Product not found.")
         return redirect(url_for('products'))
-    return render_template('product_detail.html', product=product)
+    # fetch approved reviews for this product
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT r.id, r.title, r.body, r.rating, r.created_at, u.username AS author FROM reviews r LEFT JOIN users u ON r.user_id = u.id WHERE r.product_id = ? AND r.status = 'approved' ORDER BY r.created_at DESC", (product_id,))
+        reviews = cur.fetchall()
+    except Exception:
+        reviews = []
+    conn.close()
+
+    # Try cached full HTML for this product page
+    cache_key = f"product_html:{product_id}"
+    cached = _cache.get(cache_key)
+    if cached:
+        return Response(cached, mimetype='text/html')
+
+    html = render_template('product_detail.html', product=product, reviews=reviews)
+    # cache for short period; invalidated on product edits/deletes and review actions
+    _cache.set(cache_key, html, ttl=60)
+    return Response(html, mimetype='text/html')
+
+
+@app.route('/product/<int:product_id>/review', methods=['POST'])
+@limiter.limit("3 per minute")
+@login_required
+def submit_review(product_id):
+    # validate inputs
+    rating_raw = request.form.get('rating')
+    title = request.form.get('title','').strip() or None
+    body = request.form.get('body','').strip() or None
+    if not rating_raw:
+        flash('Rating is required.')
+        return redirect(url_for('product_detail', product_id=product_id))
+    try:
+        rating = int(rating_raw)
+    except Exception:
+        flash('Invalid rating.')
+        return redirect(url_for('product_detail', product_id=product_id))
+    if rating < 1 or rating > 5:
+        flash('Rating must be between 1 and 5.')
+        return redirect(url_for('product_detail', product_id=product_id))
+    if title and len(title) > 100:
+        flash('Title too long (max 100 chars).')
+        return redirect(url_for('product_detail', product_id=product_id))
+    if body and len(body) > 1000:
+        flash('Review body too long (max 1000 chars).')
+        return redirect(url_for('product_detail', product_id=product_id))
+
+    uid = session.get('user_id')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # prevent duplicate reviews by same user for same product
+    try:
+        cur.execute("SELECT id FROM reviews WHERE product_id = ? AND user_id = ?", (product_id, uid))
+        if cur.fetchone():
+            conn.close()
+            flash('You have already submitted a review for this product.')
+            return redirect(url_for('product_detail', product_id=product_id))
+    except Exception:
+        pass
+
+    cur.execute("INSERT INTO reviews (product_id, user_id, title, body, rating, status) VALUES (?, ?, ?, ?, ?, 'pending')", (product_id, uid, title, body, rating))
+    conn.commit()
+    # invalidate product page cache so pending state doesn't show stale content (admin will approve later)
+    _cache.delete(f"product_html:{product_id}")
+    conn.close()
+    flash('Review submitted and awaiting moderation.')
+    return redirect(url_for('product_detail', product_id=product_id))
 
 
 @app.route('/cart')
@@ -356,6 +617,7 @@ def cart_view():
     return render_template('cart.html', items=items, total_items=total_items, total_amount=total_amount)
 
 @app.route('/cart/add', methods=['POST'])
+@limiter.limit("60 per minute")
 def cart_add():
     product_id = request.form.get('product_id')
     qty = int(request.form.get('quantity', 1))
@@ -466,6 +728,7 @@ def cart_remove(product_id):
     return redirect(url_for('cart_view'))
 
 @app.route('/register', methods=['GET','POST'])
+@limiter.limit("10 per hour")
 def register():
     if request.method == 'POST':
         username = request.form.get('username','').strip()
@@ -495,6 +758,7 @@ def register():
     return render_template('register.html')
 
 @app.route('/login', methods=['GET','POST'])
+@limiter.limit("5 per minute")
 def login():
     if request.method == 'POST':
         username = request.form.get('username','').strip()
@@ -522,6 +786,7 @@ def logout():
 
 @app.route('/checkout', methods=['GET', 'POST'])
 @login_required
+@limiter.limit("10 per minute")
 def checkout():
     cart = ensure_cart()
     if not cart:
@@ -688,6 +953,7 @@ def seller_profile(seller_id):
 
 
 @app.route('/seller/<int:seller_id>/contact', methods=['GET', 'POST'])
+@limiter.limit("10 per hour")
 def seller_contact(seller_id):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -744,6 +1010,7 @@ def seller_contact(seller_id):
 
 # Seller application flow
 @app.route('/apply-seller', methods=['GET', 'POST'])
+@limiter.limit("3 per hour")
 @login_required
 def apply_seller():
     # ensure applications table exists with expected schema
@@ -772,14 +1039,16 @@ def apply_seller():
 def admin_index():
     conn = get_db_connection()
     cur = conn.cursor()
-    # ensure applications table exists so the subquery below won't fail
+    # ensure applications and reviews tables exist so the subqueries below won't fail
     ensure_seller_applications_table(conn)
+    ensure_reviews_table(conn)
     cur.execute("""
         SELECT
           (SELECT COUNT(*) FROM products) AS products_count,
           (SELECT COUNT(*) FROM users) AS users_count,
           (SELECT COUNT(*) FROM orders) AS orders_count,
-          (SELECT COUNT(*) FROM seller_applications WHERE status IS NULL OR status = 'pending') AS pending_applications
+          (SELECT COUNT(*) FROM seller_applications WHERE status IS NULL OR status = 'pending') AS pending_applications,
+          (SELECT COUNT(*) FROM reviews WHERE status = 'pending') AS pending_reviews
     """)
     stats = cur.fetchone()
     conn.close()
@@ -825,6 +1094,66 @@ def admin_seller_applications():
     applications = cur.fetchall()
     conn.close()
     return render_template('admin/seller_applications.html', applications=applications)
+
+
+@app.route('/admin/reviews')
+@admin_required
+def admin_reviews():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # pending reviews
+    cur.execute("SELECT r.id, r.product_id, r.title, r.body, r.rating, r.created_at, u.username AS author, p.title AS product_title FROM reviews r LEFT JOIN users u ON r.user_id = u.id LEFT JOIN products p ON r.product_id = p.id WHERE r.status = 'pending' ORDER BY r.created_at DESC")
+    pending = cur.fetchall()
+    # recent approved
+    cur.execute("SELECT r.id, r.product_id, r.title, r.body, r.rating, r.created_at, u.username AS author, p.title AS product_title FROM reviews r LEFT JOIN users u ON r.user_id = u.id LEFT JOIN products p ON r.product_id = p.id WHERE r.status = 'approved' ORDER BY r.created_at DESC LIMIT 50")
+    approved = cur.fetchall()
+    conn.close()
+    return render_template('admin/reviews.html', pending=pending, approved=approved)
+
+
+@app.route('/admin/reviews/<int:review_id>/<action>', methods=['POST'])
+@admin_required
+def admin_review_action(review_id, action):
+    if action not in ('approve', 'reject'):
+        flash('Invalid action.')
+        return redirect(url_for('admin_reviews'))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM reviews WHERE id = ?", (review_id,))
+    r = cur.fetchone()
+    if not r:
+        conn.close()
+        flash('Review not found.')
+        return redirect(url_for('admin_reviews'))
+    if action == 'approve':
+        cur.execute("UPDATE reviews SET status = 'approved' WHERE id = ?", (review_id,))
+        # recalc product rating (average of approved reviews for this product)
+        try:
+            cur.execute("SELECT AVG(rating) AS avg_rating FROM reviews WHERE product_id = ? AND status = 'approved'", (r['product_id'],))
+            avg = cur.fetchone()['avg_rating']
+            if avg is None:
+                avg = 0.0
+            cur.execute("UPDATE products SET rating = ? WHERE id = ?", (avg, r['product_id']))
+        except Exception:
+            pass
+        flash('Review approved.')
+    else:
+        cur.execute("UPDATE reviews SET status = 'rejected' WHERE id = ?", (review_id,))
+        # also recalc product rating to exclude this rejected review
+        try:
+            cur.execute("SELECT AVG(rating) AS avg_rating FROM reviews WHERE product_id = ? AND status = 'approved'", (r['product_id'],))
+            avg = cur.fetchone()['avg_rating']
+            if avg is None:
+                avg = 0.0
+            cur.execute("UPDATE products SET rating = ? WHERE id = ?", (avg, r['product_id']))
+        except Exception:
+            pass
+        flash('Review rejected.')
+    conn.commit()
+    # invalidate product page cache
+    _cache.delete(f"product_html:{r['product_id']}")
+    conn.close()
+    return redirect(url_for('admin_reviews'))
 
 
 @app.route('/admin/seller_applications/<int:app_id>/<action>', methods=['POST'])
@@ -1008,11 +1337,16 @@ def admin_product_new():
             if stock_val > MAX_SQLITE_INT:
                 flash(f"Stock value too large. Maximum allowed is {MAX_SQLITE_INT}.")
                 return redirect(url_for('admin_product_new'))
+
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (seller_id, title, description, price_val, stock_val, image_url, category_id))
+        new_id = cur.lastrowid
         conn.commit()
+        # invalidate sitemap cache and the new product page (defensive)
+        _cache.delete('sitemap_xml')
+        _cache.delete(f"product_html:{new_id}")
         conn.close()
         flash("Product created.")
         return redirect(url_for('admin_products'))
@@ -1084,10 +1418,15 @@ def admin_product_edit(product_id):
         else:
             cur.execute("UPDATE products SET seller_id = ?, title = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?",
                 (seller_id, title, description, price_val, stock_val, category_id, product_id))
+        # commit and redirect after POST
         conn.commit()
+        # invalidate cache for this product and sitemap
+        _cache.delete(f"product_html:{product_id}")
+        _cache.delete('sitemap_xml')
         conn.close()
         flash("Product updated.")
         return redirect(url_for('admin_products'))
+
     # GET form
     cur.execute("SELECT id, username FROM users ORDER BY username")
     sellers = cur.fetchall()
@@ -1103,6 +1442,9 @@ def admin_product_delete(product_id):
     cur = conn.cursor()
     cur.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
+    # invalidate cache for this product and sitemap
+    _cache.delete(f"product_html:{product_id}")
+    _cache.delete('sitemap_xml')
     conn.close()
     flash("Product deleted.")
     return redirect(url_for('admin_products'))
@@ -1139,8 +1481,28 @@ def seller_dashboard():
     seller = cur.fetchone()
     cur.execute("SELECT id, title, price, stock, created_at, image_url FROM products WHERE seller_id = ? ORDER BY created_at DESC", (uid,))
     products = cur.fetchall()
+    # Seller analytics: recent sales and top products
+    try:
+        # total sales in last 30 days (quantity)
+        cur.execute("SELECT SUM(oi.quantity) AS qty_30 FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN products p ON oi.product_id = p.id WHERE p.seller_id = ? AND o.created_at >= datetime('now', '-30 days')", (uid,))
+        qty_30 = cur.fetchone()['qty_30'] or 0
+    except Exception:
+        qty_30 = 0
+    try:
+        # revenue in last 30 days for this seller
+        cur.execute("SELECT SUM(oi.quantity * oi.unit_price) AS rev_30 FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN products p ON oi.product_id = p.id WHERE p.seller_id = ? AND o.created_at >= datetime('now', '-30 days')", (uid,))
+        rev_30 = cur.fetchone()['rev_30'] or 0.0
+    except Exception:
+        rev_30 = 0.0
+    try:
+        # top products by quantity sold (all time)
+        cur.execute("SELECT p.id, p.title, SUM(oi.quantity) AS sold FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE p.seller_id = ? GROUP BY p.id ORDER BY sold DESC LIMIT 5", (uid,))
+        top_products = cur.fetchall()
+    except Exception:
+        top_products = []
+
     conn.close()
-    return render_template('seller/products.html', seller=seller, products=products)
+    return render_template('seller/products.html', seller=seller, products=products, qty_30=qty_30, rev_30=rev_30, top_products=top_products)
 
 
 # Seller: add new product
@@ -1193,7 +1555,11 @@ def seller_product_new():
 
         cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (uid, title, description, price_val, stock_val, image_url, category_id))
+        new_id = cur.lastrowid
         conn.commit()
+        # invalidate sitemap and product cache
+        _cache.delete('sitemap_xml')
+        _cache.delete(f"product_html:{new_id}")
         conn.close()
         flash("Product created.")
         return redirect(url_for('seller_dashboard'))
@@ -1272,10 +1638,13 @@ def seller_product_edit(product_id):
         else:
             cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?",
                         (title, description, price_val, stock_val, category_id, product_id))
-        conn.commit()
-        conn.close()
-        flash('Product updated.')
-        return redirect(url_for('seller_dashboard'))
+    conn.commit()
+    # invalidate cache for this product and sitemap
+    _cache.delete(f"product_html:{product_id}")
+    _cache.delete('sitemap_xml')
+    conn.close()
+    flash('Product updated.')
+    return redirect(url_for('seller_dashboard'))
 
     # GET: include categories for select
     cur.execute("SELECT id, name FROM categories ORDER BY name")
@@ -1304,6 +1673,9 @@ def seller_product_delete(product_id):
         return redirect(url_for('seller_dashboard'))
     cur.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
+    # invalidate cache for this product and sitemap
+    _cache.delete(f"product_html:{product_id}")
+    _cache.delete('sitemap_xml')
     conn.close()
     flash('Product deleted.')
     return redirect(url_for('seller_dashboard'))
