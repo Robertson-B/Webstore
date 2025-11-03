@@ -22,6 +22,8 @@
       </ul>
 
       <div class="d-flex align-items-center gap-2">
+        <!-- Theme toggle -->
+        <button id="theme-toggle" class="btn btn-sm btn-outline-secondary me-1" title="Toggle theme" onclick="toggleTheme()">🌗</button>
         <form class="d-flex" action="{{ url_for('products') }}" method="get" style="min-width:220px;">
           <input name="search" class="form-control form-control-sm me-2" type="search" placeholder="Search listings..." aria-label="Search" value="{{ request.args.get('search','') }}">
           {% if request.args.get('category') %}

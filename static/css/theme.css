@@ -1,0 +1,89 @@
+/* Theme variables and dark mode support */
+:root{
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --text: #2c3e50;
+  --muted: #666666;
+  --primary: #00a87e;
+  --accent: #007b60;
+  --card-shadow: rgba(0,0,0,0.06);
+}
+
+/* Dark theme when body has .dark */
+body.dark{
+  --bg: #0f1720;
+  --surface: #111827;
+  --text: #e6eef6;
+  --muted: #9aa6b2;
+  --primary: #0fbf9b;
+  --accent: #0aa178;
+  --card-shadow: rgba(0,0,0,0.6);
+}
+
+/* Backwards-compatible variable mapping for templates that use older variable names
+   (many templates set --secondary-color and --text-color inline). This ensures
+   those templates pick up dark values when .dark is active. */
+body.dark {
+  --secondary-color: var(--bg);
+  --text-color: var(--text);
+  --primary-color: var(--primary);
+}
+
+/* Smooth transitions to avoid flash */
+body, .card, .listing-card, .profile-header, .seller-header{
+  transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
+}
+
+body{
+  background: var(--bg);
+  color: var(--text);
+}
+
+a{ color: var(--primary); }
+
+.navbar, .card, .listing-card, .profile-header{
+  background: var(--surface);
+}
+
+.small-muted{ color: var(--muted); }
+
+/* Utility for dark-mode aware meta tile or other elements */
+.theme-badge{ background: var(--primary); color: #fff; padding: 2px 6px; border-radius: 4px; }
+
+/* Strong overrides for templates that use hard-coded colors so dark mode applies
+  even when templates include page-specific <style> blocks. These rules are
+  intentionally specific and may use !important to override earlier declarations. */
+body.dark .navbar { background: var(--surface) !important; color: var(--text) !important; }
+body.dark .navbar .nav-link { color: var(--text) !important; }
+body.dark .hero-section { background: var(--surface) !important; border-bottom-color: rgba(255,255,255,0.04) !important; }
+body.dark .listing-card, body.dark .card, body.dark .profile-header, body.dark .seller-header { background: var(--surface) !important; box-shadow: 0 6px 18px var(--card-shadow) !important; color: var(--text) !important; }
+body.dark .listing-card .description, body.dark .listing-card p, body.dark .card p { color: var(--muted) !important; }
+body.dark .price { color: var(--primary) !important; }
+body.dark .seller-info .rating, body.dark .rating { color: #f6c000 !important; }
+body.dark img[style], body.dark img { background: transparent !important; border-color: rgba(255,255,255,0.06) !important; }
+body.dark .site-footer-bg { background: var(--surface) !important; color: var(--text) !important; border-top-color: var(--primary) !important; }
+body.dark .site-footer .footer-link { color: var(--text) !important; }
+body.dark .site-footer .footer-link:hover { color: var(--accent) !important; }
+body.dark .btn-primary { background-color: var(--primary) !important; border-color: var(--primary) !important; }
+body.dark .text-muted, body.dark .small-muted { color: var(--muted) !important; }
+
+/* Inputs, forms */
+body.dark input, body.dark textarea, body.dark select, body.dark .form-control { background: #0b1220 !important; color: var(--text) !important; border-color: rgba(255,255,255,0.06) !important; }
+
+/* Ensure global page background and primary text color switch in dark mode even
+   when templates use inline root variables like --secondary-color / --text-color */
+body.dark, body.dark body {
+  background-color: var(--bg) !important;
+  color: var(--text) !important;
+}
+
+/* Navbar brand (Secret Bay) and prominent headings */
+body.dark .navbar-brand, body.dark .navbar-brand span, body.dark .navbar-brand a {
+  color: var(--text) !important;
+}
+
+body.dark .hero-section, body.dark .hero-section h1, body.dark .hero-section p {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+

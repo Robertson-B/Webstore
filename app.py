@@ -3,13 +3,21 @@ from functools import wraps
 import sqlite3
 import os
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask import send_file
 
 
 
 app = Flask(__name__)
 app.secret_key = "change_this_to_a_random_secret"
+
+# Make session cookies persistent by default (30 days). Set secure in production.
+app.permanent_session_lifetime = timedelta(days=30)
+# Cookie settings: adjust for your deployment. In production set SESSION_COOKIE_SECURE=True
+app.config.setdefault('SESSION_COOKIE_HTTPONLY', True)
+app.config.setdefault('SESSION_COOKIE_SAMESITE', 'Lax')
+# Leave SESSION_COOKIE_SECURE default (False) for local dev; set to True in production over HTTPS.
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "webstore.db")
 
@@ -577,16 +585,8 @@ def submit_review(product_id):
     uid = session.get('user_id')
     conn = get_db_connection()
     cur = conn.cursor()
-    # prevent duplicate reviews by same user for same product
-    try:
-        cur.execute("SELECT id FROM reviews WHERE product_id = ? AND user_id = ?", (product_id, uid))
-        if cur.fetchone():
-            conn.close()
-            flash('You have already submitted a review for this product.')
-            return redirect(url_for('product_detail', product_id=product_id))
-    except Exception:
-        pass
 
+    # Allow multiple reviews per user per product. Just insert the new review as pending.
     cur.execute("INSERT INTO reviews (product_id, user_id, title, body, rating, status) VALUES (?, ?, ?, ?, ?, 'pending')", (product_id, uid, title, body, rating))
     conn.commit()
     # invalidate product page cache so pending state doesn't show stale content (admin will approve later)
@@ -750,6 +750,7 @@ def register():
         conn.commit()
         user_id = cur.lastrowid
         conn.close()
+        session.permanent = True
         session['user_id'] = user_id
         session['username'] = username
         flash("Registered and logged in.")
@@ -771,6 +772,7 @@ def login():
         if not user or not check_password_hash(user['password_hash'], password):
             flash("Invalid credentials.")
             return redirect(url_for('login', next=request.args.get('next')))
+        session.permanent = True
         session['user_id'] = user['id']
         session['username'] = user['username']
         flash("Logged in.")
@@ -1450,6 +1452,35 @@ def admin_product_delete(product_id):
     return redirect(url_for('admin_products'))
 
 
+# Serve service worker from root so it controls the whole origin
+@app.route('/sw.js')
+def service_worker():
+    # serve the file from the static folder
+    try:
+        return send_from_directory(os.path.join(app.root_path, 'static'), 'sw.js', mimetype='application/javascript')
+    except Exception:
+        # fallback: attempt to read the file directly
+        sw_path = os.path.join(app.root_path, 'static', 'sw.js')
+        if os.path.exists(sw_path):
+            return send_file(sw_path, mimetype='application/javascript')
+        return ('', 404)
+
+
+    @app.route('/set-theme', methods=['POST'])
+    def set_theme():
+        try:
+            data = request.get_json() or {}
+            theme = data.get('theme')
+            if theme not in ('light', 'dark', 'system'):
+                return jsonify({'error': 'invalid theme'}), 400
+            resp = jsonify({'ok': True})
+            # set cookie for 1 year
+            resp.set_cookie('theme', theme, max_age=60*60*24*365, samesite='Lax')
+            return resp
+        except Exception:
+            return jsonify({'error': 'server error'}), 500
+
+
 # Seller-only decorator
 def seller_required(f):
     @wraps(f)
@@ -1638,13 +1669,13 @@ def seller_product_edit(product_id):
         else:
             cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?",
                         (title, description, price_val, stock_val, category_id, product_id))
-    conn.commit()
-    # invalidate cache for this product and sitemap
-    _cache.delete(f"product_html:{product_id}")
-    _cache.delete('sitemap_xml')
-    conn.close()
-    flash('Product updated.')
-    return redirect(url_for('seller_dashboard'))
+        conn.commit()
+        # invalidate cache for this product and sitemap
+        _cache.delete(f"product_html:{product_id}")
+        _cache.delete('sitemap_xml')
+        conn.close()
+        flash('Product updated.')
+        return redirect(url_for('seller_dashboard'))
 
     # GET: include categories for select
     cur.execute("SELECT id, name FROM categories ORDER BY name")

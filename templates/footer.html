@@ -12,6 +12,7 @@
           <a href="/cookies" class="footer-link">Cookie Policy</a>
           <span class="separator">|</span>
           <a href="/returns" class="footer-link">Return Policy</a>
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
         </div>
         <div class="col-md-4 text-md-end d-flex align-items-center justify-content-md-end gap-3">
           <a href="{{ contact_url }}" class="btn btn-outline-primary btn-sm">Contact Us</a>
@@ -44,3 +45,16 @@
     .site-footer .text-md-end { text-align: left !important; }
   }
 </style>
+
+<!-- Service Worker registration for PWA -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('/sw.js').then(function(reg) {
+        console.log('Service worker registered.', reg);
+      }).catch(function(err) {
+        console.warn('Service worker registration failed:', err);
+      });
+    });
+  }
+</script>

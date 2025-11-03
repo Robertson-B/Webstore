@@ -1,9 +1,27 @@
 <!-- Shared head includes: favicon and optional meta/theme -->
 {# Use files under static/img/favicon/ — your repo stores generated favicons there. #}
+<script>
+	// Apply stored theme preference early to avoid flash of unthemed content.
+	(function(){
+		try{
+			var theme = null;
+			try { theme = localStorage.getItem('theme'); } catch(e){}
+			if(!theme){
+				var m = document.cookie.match(/(?:^|; )theme=([^;]+)/);
+				if(m) theme = decodeURIComponent(m[1]);
+			}
+			if(theme === 'dark') document.documentElement.classList.add('dark');
+			// if 'light' explicitly, ensure dark class not present; 'system' or null = do nothing
+			if(theme === 'light') document.documentElement.classList.remove('dark');
+		}catch(e){}
+	})();
+</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg') }}">
 <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='img/favicon/favicon-32x32.png') }}">
 <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='img/favicon/favicon-16x16.png') }}">
 <link rel="shortcut icon" href="{{ url_for('static', filename='img/favicon/favicon.ico') }}">
 <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='img/favicon/apple-touch-icon.png') }}">
-<link rel="manifest" href="{{ url_for('static', filename='img/favicon/site.webmanifest') }}">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 <meta name="theme-color" content="#00a87e">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='img/icons/icon-192.svg') }}">
