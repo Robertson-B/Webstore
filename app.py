@@ -10,14 +10,24 @@ from flask import send_file
 
 
 app = Flask(__name__)
-app.secret_key = "change_this_to_a_random_secret"
+app.secret_key = os.environ.get('SECRET_KEY', "change_this_to_a_random_secret")
 
 # Make session cookies persistent by default (30 days). Set secure in production.
 app.permanent_session_lifetime = timedelta(days=30)
 # Cookie settings: adjust for your deployment. In production set SESSION_COOKIE_SECURE=True
 app.config.setdefault('SESSION_COOKIE_HTTPONLY', True)
 app.config.setdefault('SESSION_COOKIE_SAMESITE', 'Lax')
-# Leave SESSION_COOKIE_SECURE default (False) for local dev; set to True in production over HTTPS.
+
+# Optional HTTPS support for local testing and production toggling.
+# Set the environment variable ENABLE_HTTPS=1 (or true) to enable HTTPS (uses an adhoc cert when running
+# the Flask dev server). In production you should terminate TLS at a reverse proxy and set
+# SESSION_COOKIE_SECURE=True in the environment or via ENABLE_HTTPS.
+_ssl_env = os.environ.get('ENABLE_HTTPS', '').lower()
+SSL_ENABLED = _ssl_env in ('1', 'true', 'yes')
+app.config['SESSION_COOKIE_SECURE'] = SSL_ENABLED
+# Prefer https for URL generation when SSL enabled
+if SSL_ENABLED:
+    app.config['PREFERRED_URL_SCHEME'] = 'https'
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "webstore.db")
 
@@ -91,6 +101,19 @@ def get_db_connection(path=DB_PATH):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+
+# Security headers helper
+@app.after_request
+def set_security_headers(response):
+    # Basic protections
+    response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('Referrer-Policy', 'no-referrer-when-downgrade')
+    # Enable HSTS when SSL is enabled
+    if 'SSL_ENABLED' in globals() and SSL_ENABLED:
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload')
+    return response
 
 
 # Ensure categories table and products.category_id exist on startup (best-effort)
@@ -430,13 +453,37 @@ def admin_required(f):
 def index():
     conn = get_db_connection()
     cur = conn.cursor()
+    # Select up to 6 products ordered by the timestamp of their most recent sale.
+    # We prefer recently sold items; if fewer than 6 products have sales, backfill
+    # with recently created products to reach 6 items.
     cur.execute("""
-        SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username
-        FROM products p 
-        LEFT JOIN users u ON p.seller_id = u.id 
-        ORDER BY p.created_at DESC LIMIT 6
+        SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url,
+               u.business_name, u.rating, u.username AS seller_username,
+               MAX(o.created_at) AS last_sold
+        FROM products p
+        JOIN order_items oi ON oi.product_id = p.id
+        JOIN orders o ON o.id = oi.order_id
+        LEFT JOIN users u ON p.seller_id = u.id
+        GROUP BY p.id
+        ORDER BY last_sold DESC
+        LIMIT 6
     """)
     featured = cur.fetchall()
+    # Backfill with recently created products if needed
+    if len(featured) < 6:
+        existing_ids = [str(r['id']) for r in featured]
+        placeholders = ','.join(['?'] * len(existing_ids)) if existing_ids else ''
+        remaining = 6 - len(featured)
+        if existing_ids:
+            q = f"SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id NOT IN ({placeholders}) ORDER BY p.created_at DESC LIMIT ?"
+            params = [int(i) for i in existing_ids] + [remaining]
+        else:
+            q = "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id ORDER BY p.created_at DESC LIMIT ?"
+            params = [remaining]
+        cur.execute(q, params)
+        more = cur.fetchall()
+        # append backfilled rows
+        featured = featured + more
     conn.close()
     return render_template('index.html', featured_products=featured)
 
@@ -1822,5 +1869,12 @@ def admin_user_delete(user_id):
     return redirect(url_for('admin_users'))
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    # Keep debug True by default for local development; override with FLASK_DEBUG env var if desired
+    debug = os.environ.get('FLASK_DEBUG', '1') in ('1', 'true', 'True')
+    if 'SSL_ENABLED' in globals() and SSL_ENABLED:
+        # Use an adhoc certificate for local HTTPS testing. In production, terminate TLS at a proxy.
+        app.run(debug=debug, host="0.0.0.0", port=port, ssl_context='adhoc')
+    else:
+        app.run(debug=debug, host="0.0.0.0", port=port)
 

@@ -70,6 +70,15 @@ body.dark .text-muted, body.dark .small-muted { color: var(--muted) !important; 
 /* Inputs, forms */
 body.dark input, body.dark textarea, body.dark select, body.dark .form-control { background: #0b1220 !important; color: var(--text) !important; border-color: rgba(255,255,255,0.06) !important; }
 
+/* Admin/table specific dark-mode rules */
+body.dark table, body.dark .table { color: var(--text) !important; background: transparent !important; }
+body.dark .table th, body.dark .table td { color: var(--text) !important; border-color: rgba(255,255,255,0.06) !important; }
+body.dark .table thead th { background: rgba(255,255,255,0.02) !important; }
+body.dark .table-striped tbody tr:nth-of-type(odd) { background-color: rgba(255,255,255,0.01) !important; }
+body.dark .table-striped tbody tr { background-color: transparent !important; }
+body.dark .card, body.dark .card * { color: var(--text) !important; }
+body.dark h1, body.dark h2, body.dark h3, body.dark h4, body.dark h5, body.dark h6 { color: var(--text) !important; }
+
 /* Ensure global page background and primary text color switch in dark mode even
    when templates use inline root variables like --secondary-color / --text-color */
 body.dark, body.dark body {
@@ -78,6 +87,12 @@ body.dark, body.dark body {
 }
 
 /* Navbar brand (Secret Bay) and prominent headings */
+/* Navbar brand (Secret Bay) and prominent headings */
+/* Ensure brand uses theme text color in light and dark modes. Templates use .site-navbar to opt in. */
+.site-navbar .navbar-brand, .site-navbar .navbar-brand span, .site-navbar .navbar-brand a {
+  color: var(--text) !important;
+}
+
 body.dark .navbar-brand, body.dark .navbar-brand span, body.dark .navbar-brand a {
   color: var(--text) !important;
 }
