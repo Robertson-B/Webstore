@@ -4,11 +4,27 @@
   {% include 'head_includes.html' %}
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Admin Dashboard - Secret Bay</title>
+  <title>Admin Dashboard</title>
+  <style>
+    /* Make card action buttons consistent: centered, capped width, identical padding/font-size.
+       This ensures all buttons (regardless of surrounding content) visually match. */
+    .admin-dashboard .card .btn {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 280px; /* cap width so buttons match across cards on large screens */
+      margin: 0.5rem auto 0; /* center horizontally and keep spacing from preceding content */
+      padding: .5rem .75rem;
+      font-size: 1rem;
+      line-height: 1.25;
+    }
+    /* Normalize btn-sm in this area to visual parity with standard buttons */
+    .admin-dashboard .card .btn.btn-sm { padding: .5rem .75rem; font-size: 1rem; }
+  </style>
 </head>
 <body>
   {% include 'navbar.html' %}
-  <div class="container my-4">
+  <div class="container my-4 admin-dashboard">
     <h1>Admin Dashboard</h1>
     <div class="row mt-3">
       <div class="col-md-4">

@@ -1,6 +1,6 @@
 {
-  "name": "Secret Bay",
-  "short_name": "SecretBay",
+  "name": "Card Haven",
+  "short_name": "CardHaven",
   "start_url": "/?utm_source=homescreen",
   "display": "standalone",
   "background_color": "#ffffff",

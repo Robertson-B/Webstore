@@ -1,4 +1,4 @@
-const CACHE_NAME = 'secretbay-v1';
+const CACHE_NAME = 'cardhaven-v2';
 const ASSETS = [
   '/',
   '/offline',

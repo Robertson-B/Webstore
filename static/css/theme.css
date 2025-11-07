@@ -45,6 +45,16 @@ a{ color: var(--primary); }
   background: var(--surface);
 }
 
+/* Ensure Bootstrap's .btn-primary matches our theme variables across templates
+   Templates historically used --primary-color while theme.css uses --primary.
+   Provide a resilient override that prefers --primary, falls back to
+   --primary-color (template-level) and finally to a safe hex. */
+.btn-primary {
+  background-color: var(--primary, var(--primary-color, #00a87e)) !important;
+  border-color: var(--primary, var(--primary-color, #00a87e)) !important;
+  color: #fff !important;
+}
+
 .small-muted{ color: var(--muted); }
 
 /* Utility for dark-mode aware meta tile or other elements */
@@ -86,8 +96,51 @@ body.dark, body.dark body {
   color: var(--text) !important;
 }
 
-/* Navbar brand (Secret Bay) and prominent headings */
-/* Navbar brand (Secret Bay) and prominent headings */
+/* Responsive helpers: improve layout on small screens (phones/tablets) */
+/* Reduce card padding, smaller images, stack controls vertically where appropriate */
+@media (max-width: 767.98px) {
+  .listing-card {
+    padding: 10px !important;
+  }
+  .listing-card .description { font-size: 0.95rem; }
+  .listing-card img { max-height: 120px !important; width: 100% !important; height: auto !important; object-fit: contain !important; }
+  .price { font-size: 1.1rem; }
+  .seller-info { font-size: 0.85rem; }
+  /* make small action buttons within listing cards easier to tap on phones (scoped) */
+  .listing-card .btn-sm { padding: .45rem .6rem; font-size: .95rem; }
+  /* stack footer controls inside listing-card only when they are direct children (safer) */
+  .listing-card > .d-flex.justify-content-between { flex-direction: column; gap: .5rem; align-items: flex-start; }
+  .listing-card > .d-flex.justify-content-between .btn { width: 100%; max-width: none; }
+  /* Stack navbar controls on small screens so nothing overflows */
+  .site-navbar .navbar-collapse .navbar-right { flex-direction: column; align-items: stretch; gap: .5rem; }
+  .site-navbar .navbar-collapse .navbar-right .form-control { width: 100%; }
+  .site-navbar .navbar-collapse .navbar-right .auth-buttons, .site-navbar .navbar-collapse .navbar-right .user-info { width: 100%; display: flex; justify-content: flex-start; }
+  .site-navbar .navbar-collapse .navbar-right .auth-buttons a { width: auto; }
+}
+
+/* Make mobile actions dropdown full width inside collapsed navbar */
+@media (max-width: 991.98px) {
+  .navbar-nav .dropdown-menu { width: 100%; }
+  .navbar-nav .dropdown-menu .form-control { width: 100%; }
+}
+
+@media (max-width: 575.98px) {
+  /* Extra-small screens: tighten spacing and increase tap targets */
+  .listing-card { padding: 8px !important; }
+  .listing-card img { max-height: 100px !important; }
+  .listing-card h5 { font-size: 1rem; margin-bottom: .35rem; }
+  .price { font-size: 1rem; }
+  /* avoid globally forcing btn-sm to be block — only listing-card footers should expand */
+  .listing-card > .d-flex.justify-content-between .btn-sm { display: block; width: 100%; }
+}
+
+/* Disable subtle hover transform on touch devices to avoid jumpiness */
+@media (hover: none) {
+  .listing-card:hover { transform: none !important; box-shadow: 0 2px 6px var(--card-shadow) !important; }
+}
+
+/* Navbar brand (Card Haven) and prominent headings */
+/* Navbar brand (Card Haven) and prominent headings */
 /* Ensure brand uses theme text color in light and dark modes. Templates use .site-navbar to opt in. */
 .site-navbar .navbar-brand, .site-navbar .navbar-brand span, .site-navbar .navbar-brand a {
   color: var(--text) !important;

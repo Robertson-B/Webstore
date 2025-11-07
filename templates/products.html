@@ -4,7 +4,7 @@
     {% include 'head_includes.html' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Listings - Secret Bay</title>
+    <title>Listings</title>
     <style>
         :root {
             --primary-color: #00a87e;
@@ -99,8 +99,19 @@
                         <div class="listing-card">
                                                                                                                 <h5>
                                                                                                                     {{ p['title'] }}
-                                                                                                                    {% if p['stock'] is not none and p['stock']|int <= 0 %}
-                                                                                                                        <span class="badge bg-danger ms-2">Out of stock</span>
+                                                                                                                    {% if p['stock'] is not none %}
+                                                                                                                        {% set s = p['stock']|int %}
+                                                                                                                        {% if s <= 0 %}
+                                                                                                                            <span class="badge bg-danger ms-2">Out of stock</span>
+                                                                                                                        {% elif s == 1 %}
+                                                                                                                            <span class="badge bg-warning text-white ms-2">1 left</span>
+                                                                                                                        {% elif s == 2 %}
+                                                                                                                            <span class="badge bg-warning text-white ms-2">2 left</span>
+                                                                                                                        {% elif s == 3 %}
+                                                                                                                            <span class="badge bg-warning text-white ms-2">3 left</span>
+                                                                                                                        {% elif s < 5 %}
+                                                                                                                            <span class="badge bg-warning text-white ms-2">{{ s }} left</span>
+                                                                                                                        {% endif %}
                                                                                                                     {% endif %}
                                                                                                                 </h5>
                                                                                                                 <p class="price">${{ '%.2f'|format(p['price']) }}</p>

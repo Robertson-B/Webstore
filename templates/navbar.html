@@ -1,9 +1,15 @@
 <nav class="navbar navbar-expand-lg mb-3 site-navbar" aria-label="Main navigation">
   <div class="container">
     <a class="navbar-brand d-flex align-items-center" href="{{ url_for('index') }}">
-      <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Secret Bay logo" height="32" class="me-2" style="width:auto;">
-      <span>Secret Bay</span>
+  <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Card Haven logo" height="32" class="me-2" style="width:auto;">
+  <span>Card Haven</span>
     </a>
+
+  <!-- Search placed next to brand so it's always visible and accessible on mobile; hidden on large screens where desktop search is shown -->
+  <form class="d-flex ms-2 flex-grow-1 d-lg-none" action="{{ url_for('products') }}" method="get">
+      <input name="search" class="form-control form-control-sm" type="search" placeholder="Search listings..." aria-label="Search" value="{{ request.args.get('search','') }}">
+      <button class="btn btn-sm btn-primary ms-2" type="submit">Search</button>
+    </form>
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
       <span class="navbar-toggler-icon"></span>
@@ -19,16 +25,27 @@
         {% if current_user_is_admin %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_index') }}">Admin</a></li>
         {% endif %}
+        {# Mobile-only actions as top-level nav items inside the collapsed menu #}
+        <li class="nav-item d-lg-none">
+          <a class="nav-link" href="#" onclick="toggleTheme(); return false;">Toggle theme</a>
+        </li>
+        <li class="nav-item d-lg-none">
+          <a class="nav-link" href="{{ url_for('cart_view') }}" data-collapse-nav="1">Cart <span id="cart-count-mobile" class="badge bg-primary ms-2">0</span></a>
+        </li>
+        {% if session.get('username') %}
+          <li class="nav-item d-lg-none"><a class="nav-link" href="{{ url_for('logout') }}" data-collapse-nav="1">Log out ({{ session['username'] }})</a></li>
+        {% else %}
+          <li class="nav-item d-lg-none"><a class="nav-link" href="{{ url_for('login') }}" data-collapse-nav="1">Login</a></li>
+          <li class="nav-item d-lg-none"><a class="nav-link" href="{{ url_for('register') }}" data-collapse-nav="1">Register</a></li>
+        {% endif %}
       </ul>
 
-      <div class="d-flex align-items-center gap-2">
+  <div class="d-none d-lg-flex align-items-center gap-2 navbar-right">
         <!-- Theme toggle -->
         <button id="theme-toggle" class="btn btn-sm btn-outline-secondary me-1" title="Toggle theme" onclick="toggleTheme()">🌗</button>
-        <form class="d-flex" action="{{ url_for('products') }}" method="get" style="min-width:220px;">
+        <!-- Desktop search (visible on large screens) -->
+        <form class="d-none d-lg-flex align-items-center me-2" action="{{ url_for('products') }}" method="get">
           <input name="search" class="form-control form-control-sm me-2" type="search" placeholder="Search listings..." aria-label="Search" value="{{ request.args.get('search','') }}">
-          {% if request.args.get('category') %}
-            <input type="hidden" name="category" value="{{ request.args.get('category') }}">
-          {% endif %}
           <button class="btn btn-sm btn-primary" type="submit">Search</button>
         </form>
 
@@ -37,13 +54,13 @@
         </a>
 
         {% if session.get('username') %}
-          <div class="text-end">
+          <div class="text-end user-info mt-2 mt-lg-0">
             <div>Logged in as <strong>{{ session['username'] }}</strong></div>
             <a href="{{ url_for('logout') }}" class="small">Log out</a>
           </div>
         {% else %}
-          <div>
-            <a href="{{ url_for('login') }}" class="btn btn-sm btn-outline-primary me-1">Login</a>
+          <div class="auth-buttons d-flex gap-1 mt-2 mt-lg-0">
+            <a href="{{ url_for('login') }}" class="btn btn-sm btn-outline-primary">Login</a>
             <a href="{{ url_for('register') }}" class="btn btn-sm btn-primary">Register</a>
           </div>
         {% endif %}
@@ -57,8 +74,41 @@
   document.addEventListener('DOMContentLoaded', () => {
     fetch('{{ url_for("cart_summary") }}').then(r => r.json()).then(d => {
       const badge = document.getElementById('cart-count');
+      const badgeMobile = document.getElementById('cart-count-mobile');
       if (badge) badge.textContent = d.total_items || 0;
+      if (badgeMobile) badgeMobile.textContent = d.total_items || 0;
     }).catch(()=>{});
+
+    // Ensure mobile nav links close the collapsed navbar and then navigate.
+    try {
+      document.querySelectorAll('[data-collapse-nav="1"]').forEach(el => {
+        el.addEventListener('click', function(e){
+          // if link is an anchor to same page or '#', allow default
+          const href = el.getAttribute('href');
+          const collapseEl = document.getElementById('mainNav');
+          try {
+            if (collapseEl && collapseEl.classList.contains('show')) {
+              // use Bootstrap's Collapse API if available
+              if (window.bootstrap && window.bootstrap.Collapse) {
+                const instance = window.bootstrap.Collapse.getInstance(collapseEl) || new window.bootstrap.Collapse(collapseEl, {toggle:false});
+                instance.hide();
+              } else {
+                collapseEl.classList.remove('show');
+              }
+            }
+          } catch (err) {
+            // ignore
+          }
+          if (href && href !== '#') {
+            e.preventDefault();
+            // small delay to allow collapse animation to run
+            setTimeout(() => { window.location.href = href; }, 200);
+          }
+        });
+      });
+    } catch (err) {
+      // ignore
+    }
   });
 </script>
 
@@ -68,6 +118,20 @@
   /* Ensure navbar uses theme-aware surface color instead of Bootstrap's bg-white */
   .site-navbar { background: var(--surface) !important; }
   .site-navbar .nav-link { color: var(--text) !important; }
+  /* Make brand text slightly smaller on mobile and allow the search to shrink */
+  .site-navbar .navbar-brand span { font-size: 1.05rem; font-weight: 600; }
+  .site-navbar form.d-flex { min-width: 0; }
+  .site-navbar .form-control { min-width: 0; }
+
+  /* Toggler: black background with white icon for contrast on all backgrounds */
+  .site-navbar .navbar-toggler { background-color: #000 !important; border: none; padding: .3rem .5rem; border-radius: 6px; }
+  .site-navbar .navbar-toggler-icon { background-image: url("data:image/svg+xml;charset=utf8,%3Csvg viewBox='0 0 30 30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath stroke='rgba(255,255,255,1)' stroke-width='2' stroke-linecap='round' stroke-miterlimit='10' d='M4 7h22M4 15h22M4 23h22'/%3E%3C/svg%3E"); }
+
+  @media (max-width: 767.98px) {
+    .site-navbar .navbar-brand span { font-size: 0.95rem; }
+    /* allow the search to occupy remaining space but not push the toggler off */
+    .site-navbar form.d-flex { max-width: 60%; }
+  }
 </style>
 
 <!-- open a site-content wrapper so footer can push to bottom via flexbox -->

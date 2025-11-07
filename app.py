@@ -35,6 +35,20 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "webstore.db")
 # Protect against Python ints larger than the SQLite C type can hold.
 MAX_SQLITE_INT = 2**63 - 1
 
+# Configure SQLAlchemy to use the same sqlite file. We call db.init_app(app)
+# below if `models` is available. Keep existing sqlite3 helpers for a gradual
+# migration so the app remains functional until queries are fully converted.
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.abspath(DB_PATH).replace('\\', '/')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Initialize SQLAlchemy instance from `models.py` (best-effort)
+try:
+    from models import db
+    db.init_app(app)
+except Exception:
+    # If SQLAlchemy isn't available at runtime, keep using sqlite3-based helpers.
+    db = None
+
 
 # Simple in-memory TTL cache used for page fragments (product pages, sitemap).
 # This avoids adding external dependencies. Keys and values live in process memory
@@ -139,7 +153,7 @@ def contact():
         email = request.form.get('email','').strip()
         subject = request.form.get('subject','').strip()
         message = request.form.get('message','').strip()
-        # we could log or send to an external service here; for now just acknowledge
+        # we could log or send to an external service here; but thats effort
         flash('Thanks for your message — we will get back to you soon.')
         return redirect(url_for('contact'))
     return render_template('contact.html')
@@ -334,6 +348,54 @@ def ensure_products_rating_column(conn):
         pass
 
 
+def recalc_product_rating(conn, product_id):
+    """Recalculate average approved review rating for a product and store it in products.rating."""
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT AVG(rating) AS avg_rating FROM reviews WHERE product_id = ? AND status = 'approved'", (product_id,))
+        avg = cur.fetchone()['avg_rating']
+        if avg is None:
+            avg = 0.0
+        cur.execute("UPDATE products SET rating = ? WHERE id = ?", (avg, product_id))
+        conn.commit()
+    except Exception:
+        # best-effort: ignore failures here
+        pass
+
+
+def recalc_seller_rating(conn, seller_id):
+    """Recalculate seller rating as the average of all approved reviews for their products."""
+    try:
+        cur = conn.cursor()
+        # join reviews to products to find reviews for this seller's products
+        cur.execute(
+            "SELECT AVG(r.rating) AS avg_rating FROM reviews r JOIN products p ON r.product_id = p.id WHERE p.seller_id = ? AND r.status = 'approved'",
+            (seller_id,)
+        )
+        avg = cur.fetchone()['avg_rating']
+        if avg is None:
+            avg = 0.0
+        cur.execute("UPDATE users SET rating = ? WHERE id = ?", (avg, seller_id))
+        conn.commit()
+    except Exception:
+        pass
+
+
+# Backfill seller ratings at startup (best-effort): compute rating as avg of approved reviews
+try:
+    _conn = get_db_connection()
+    cur = _conn.cursor()
+    cur.execute("SELECT id FROM users WHERE is_seller = 1")
+    for r in cur.fetchall():
+        try:
+            recalc_seller_rating(_conn, r['id'])
+        except Exception:
+            pass
+    _conn.close()
+except Exception:
+    pass
+
+
 # Call the migration helper on startup (best-effort). This must run after
 # the function is defined so imports won't fail when the module loads.
 try:
@@ -451,41 +513,123 @@ def admin_required(f):
 
 @app.route('/')
 def index():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    # Select up to 6 products ordered by the timestamp of their most recent sale.
-    # We prefer recently sold items; if fewer than 6 products have sales, backfill
-    # with recently created products to reach 6 items.
-    cur.execute("""
-        SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url,
-               u.business_name, u.rating, u.username AS seller_username,
-               MAX(o.created_at) AS last_sold
-        FROM products p
-        JOIN order_items oi ON oi.product_id = p.id
-        JOIN orders o ON o.id = oi.order_id
-        LEFT JOIN users u ON p.seller_id = u.id
-        GROUP BY p.id
-        ORDER BY last_sold DESC
-        LIMIT 6
-    """)
-    featured = cur.fetchall()
-    # Backfill with recently created products if needed
-    if len(featured) < 6:
-        existing_ids = [str(r['id']) for r in featured]
-        placeholders = ','.join(['?'] * len(existing_ids)) if existing_ids else ''
-        remaining = 6 - len(featured)
-        if existing_ids:
-            q = f"SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id NOT IN ({placeholders}) ORDER BY p.created_at DESC LIMIT ?"
-            params = [int(i) for i in existing_ids] + [remaining]
+    # Prefer using SQLAlchemy ORM when available for cleaner queries and safer migrations.
+    featured = []
+    try:
+        if db is not None:
+            # Use ORM: find up to 6 products ordered by their most recent sale timestamp.
+            # If there are fewer than 6 sold products, backfill with recently created products.
+            from sqlalchemy import func
+            from models import Product, User, OrderItem, Order
+
+            # subquery: last sold timestamp per product
+            last_sold_subq = db.session.query(
+                OrderItem.product_id.label('product_id'),
+                func.max(Order.created_at).label('last_sold')
+            ).join(Order, OrderItem.order_id == Order.id).group_by(OrderItem.product_id).subquery()
+
+            # query products joined to seller and last_sold (nullable)
+            rows = db.session.query(Product, User, last_sold_subq.c.last_sold).outerjoin(User, Product.seller_id == User.id).outerjoin(last_sold_subq, Product.id == last_sold_subq.c.product_id).order_by(last_sold_subq.c.last_sold.desc()).limit(6).all()
+
+            # Transform results into a lightweight dict-like object compatible with templates
+            def _to_row(prod, seller, last_sold):
+                return {
+                    'id': prod.id,
+                    'title': prod.title,
+                    'description': prod.description,
+                    'price': prod.price,
+                    'stock': prod.stock,
+                    'created_at': prod.created_at.isoformat() if getattr(prod, 'created_at', None) is not None else '',
+                    'seller_id': prod.seller_id,
+                    'image_url': prod.image_url,
+                    'business_name': getattr(seller, 'business_name', None) if seller else None,
+                    'rating': getattr(seller, 'rating', None) if seller else None,
+                    'seller_username': getattr(seller, 'username', None) if seller else None,
+                    'last_sold': last_sold
+                }
+
+            featured = [_to_row(p, s, ls) for p, s, ls in rows]
+
+            # Backfill with recently created products if needed
+            if len(featured) < 6:
+                existing_ids = [r['id'] for r in featured]
+                needed = 6 - len(featured)
+                q = Product.query
+                if existing_ids:
+                    q = q.filter(~Product.id.in_(existing_ids))
+                more = q.order_by(Product.created_at.desc()).limit(needed).all()
+                featured += [_to_row(p, getattr(p, 'seller', None), None) for p in more]
         else:
-            q = "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id ORDER BY p.created_at DESC LIMIT ?"
-            params = [remaining]
-        cur.execute(q, params)
-        more = cur.fetchall()
-        # append backfilled rows
-        featured = featured + more
-    conn.close()
-    return render_template('index.html', featured_products=featured)
+            # fallback: use sqlite3 raw SQL as before
+            conn = get_db_connection()
+            cur = conn.cursor()
+            # Select up to 6 products ordered by the timestamp of their most recent sale.
+            # We prefer recently sold items; if fewer than 6 products have sales, backfill
+            # with recently created products to reach 6 items.
+            cur.execute("""
+                SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url,
+                       u.business_name, u.rating, u.username AS seller_username,
+                       MAX(o.created_at) AS last_sold
+                FROM products p
+                JOIN order_items oi ON oi.product_id = p.id
+                JOIN orders o ON o.id = oi.order_id
+                LEFT JOIN users u ON p.seller_id = u.id
+                GROUP BY p.id
+                ORDER BY last_sold DESC
+                LIMIT 6
+            """)
+            featured = cur.fetchall()
+            # Backfill with recently created products if needed
+            if len(featured) < 6:
+                existing_ids = [str(r['id']) for r in featured]
+                placeholders = ','.join(['?'] * len(existing_ids)) if existing_ids else ''
+                remaining = 6 - len(featured)
+                if existing_ids:
+                    q = f"SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id NOT IN ({placeholders}) ORDER BY p.created_at DESC LIMIT ?"
+                    params = [int(i) for i in existing_ids] + [remaining]
+                else:
+                    q = "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id ORDER BY p.created_at DESC LIMIT ?"
+                    params = [remaining]
+                cur.execute(q, params)
+                more = cur.fetchall()
+                # append backfilled rows
+                featured = featured + more
+            conn.close()
+    except Exception:
+        # On any ORM error, fall back to sqlite3-based behavior to keep the app running.
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id ORDER BY p.created_at DESC LIMIT 6")
+            featured = cur.fetchall()
+            conn.close()
+        except Exception:
+            featured = []
+    # Load recently viewed products from session (preserve order)
+    recently_viewed_products = []
+    try:
+        rv_ids = session.get('recently_viewed', []) or []
+        # ensure ints and limited to 3
+        rv_ids = [int(x) for x in rv_ids][:3]
+        if rv_ids:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            for pid in rv_ids:
+                try:
+                    cur.execute(
+                        "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id = ?",
+                        (pid,)
+                    )
+                    r = cur.fetchone()
+                    if r:
+                        recently_viewed_products.append(r)
+                except Exception:
+                    continue
+            conn.close()
+    except Exception:
+        recently_viewed_products = []
+
+    return render_template('index.html', featured_products=featured, recently_viewed_products=recently_viewed_products)
 
 @app.route('/about')
 def about():
@@ -565,22 +709,105 @@ def products():
 
 @app.route('/product/<int:product_id>')
 def product_detail(product_id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-     SELECT p.id, p.title, p.description, p.price, p.stock, p.image_url,
-         u.id AS seller_id, u.business_name, u.seller_description, u.rating,
-         c.name AS category_name, c.slug AS category_slug
-     FROM products p
-     LEFT JOIN users u ON p.seller_id = u.id
-     LEFT JOIN categories c ON p.category_id = c.id
-     WHERE p.id = ?
-    """, (product_id,))
-    product = cur.fetchone()
-    conn.close()
-    if product is None:
-        flash("Product not found.")
-        return redirect(url_for('products'))
+    # Prefer ORM when available for clearer code and typed objects.
+    product = None
+    reviews = []
+    try:
+        if db is not None:
+            from sqlalchemy.orm import joinedload
+            from models import Product, Review
+            # eager-load seller and category to avoid lazy-load DB hits in templates
+            product_obj = Product.query.options(joinedload(Product.seller), joinedload(Product.category)).filter_by(id=product_id).first()
+            if product_obj:
+                product = {
+                    'id': product_obj.id,
+                    'title': product_obj.title,
+                    'description': product_obj.description,
+                    'price': product_obj.price,
+                    'stock': product_obj.stock,
+                    'image_url': product_obj.image_url,
+                    'seller_id': product_obj.seller_id,
+                    'business_name': getattr(product_obj.seller, 'business_name', None) if product_obj.seller else None,
+                    'seller_description': getattr(product_obj.seller, 'seller_description', None) if product_obj.seller else None,
+                    'rating': getattr(product_obj.seller, 'rating', None) if product_obj.seller else None,
+                    'category_name': getattr(product_obj.category, 'name', None) if product_obj.category else None,
+                    'category_slug': getattr(product_obj.category, 'slug', None) if product_obj.category else None,
+                }
+                # approved reviews
+                rev_objs = Review.query.filter_by(product_id=product_id, status='approved').order_by(Review.created_at.desc()).all()
+                reviews = [{'id': r.id, 'title': r.title, 'body': r.body, 'rating': r.rating, 'created_at': (r.created_at.isoformat() if getattr(r, 'created_at', None) is not None else ''), 'author': getattr(r.author, 'username', None)} for r in rev_objs]
+            else:
+                product = None
+        else:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+             SELECT p.id, p.title, p.description, p.price, p.stock, p.image_url,
+                 u.id AS seller_id, u.business_name, u.seller_description, u.rating,
+                 c.name AS category_name, c.slug AS category_slug
+             FROM products p
+             LEFT JOIN users u ON p.seller_id = u.id
+             LEFT JOIN categories c ON p.category_id = c.id
+             WHERE p.id = ?
+            """, (product_id,))
+            product = cur.fetchone()
+            conn.close()
+            if product is None:
+                flash("Product not found.")
+                return redirect(url_for('products'))
+            # fetch approved reviews for this product
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT r.id, r.title, r.body, r.rating, r.created_at, u.username AS author FROM reviews r LEFT JOIN users u ON r.user_id = u.id WHERE r.product_id = ? AND r.status = 'approved' ORDER BY r.created_at DESC", (product_id,))
+                reviews = cur.fetchall()
+            except Exception:
+                reviews = []
+            conn.close()
+    except Exception:
+        # Any ORM failure should fall back to sqlite3-based handling to keep the site live.
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+             SELECT p.id, p.title, p.description, p.price, p.stock, p.image_url,
+                 u.id AS seller_id, u.business_name, u.seller_description, u.rating,
+                 c.name AS category_name, c.slug AS category_slug
+             FROM products p
+             LEFT JOIN users u ON p.seller_id = u.id
+             LEFT JOIN categories c ON p.category_id = c.id
+             WHERE p.id = ?
+            """, (product_id,))
+            product = cur.fetchone()
+            conn.close()
+            if product is None:
+                flash("Product not found.")
+                return redirect(url_for('products'))
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT r.id, r.title, r.body, r.rating, r.created_at, u.username AS author FROM reviews r LEFT JOIN users u ON r.user_id = u.id WHERE r.product_id = ? AND r.status = 'approved' ORDER BY r.created_at DESC", (product_id,))
+                reviews = cur.fetchall()
+            except Exception:
+                reviews = []
+            conn.close()
+        except Exception:
+            flash("Product not found.")
+            return redirect(url_for('products'))
+    # Record recently viewed products in session (most-recent-first, keep up to 3)
+    try:
+        rv = session.get('recently_viewed', []) or []
+        # normalize to ints
+        rv = [int(x) for x in rv]
+        if product_id in rv:
+            rv.remove(product_id)
+        rv.insert(0, product_id)
+        # keep only last 3
+        rv = rv[:3]
+        session['recently_viewed'] = rv
+    except Exception:
+        # non-fatal if session update fails
+        pass
     # fetch approved reviews for this product
     conn = get_db_connection()
     cur = conn.cursor()
@@ -661,7 +888,30 @@ def cart_view():
                 })
         conn.close()
     total_items, total_amount = cart_total_items_and_amount(cart)
-    return render_template('cart.html', items=items, total_items=total_items, total_amount=total_amount)
+    # Load recently viewed products for display on the cart page
+    recently_viewed_products = []
+    try:
+        rv_ids = session.get('recently_viewed', []) or []
+        rv_ids = [int(x) for x in rv_ids][:3]
+        if rv_ids:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            for pid in rv_ids:
+                try:
+                    cur.execute(
+                        "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id = ?",
+                        (pid,)
+                    )
+                    r = cur.fetchone()
+                    if r:
+                        recently_viewed_products.append(r)
+                except Exception:
+                    continue
+            conn.close()
+    except Exception:
+        recently_viewed_products = []
+
+    return render_template('cart.html', items=items, total_items=total_items, total_amount=total_amount, recently_viewed_products=recently_viewed_products)
 
 @app.route('/cart/add', methods=['POST'])
 @limiter.limit("60 per minute")
@@ -1176,25 +1426,26 @@ def admin_review_action(review_id, action):
         return redirect(url_for('admin_reviews'))
     if action == 'approve':
         cur.execute("UPDATE reviews SET status = 'approved' WHERE id = ?", (review_id,))
-        # recalc product rating (average of approved reviews for this product)
+        # Recalculate product rating and the owning seller's rating
         try:
-            cur.execute("SELECT AVG(rating) AS avg_rating FROM reviews WHERE product_id = ? AND status = 'approved'", (r['product_id'],))
-            avg = cur.fetchone()['avg_rating']
-            if avg is None:
-                avg = 0.0
-            cur.execute("UPDATE products SET rating = ? WHERE id = ?", (avg, r['product_id']))
+            recalc_product_rating(conn, r['product_id'])
+            # fetch seller id for this product and update their rating
+            cur.execute("SELECT seller_id FROM products WHERE id = ?", (r['product_id'],))
+            pr = cur.fetchone()
+            if pr and pr['seller_id']:
+                recalc_seller_rating(conn, pr['seller_id'])
         except Exception:
             pass
         flash('Review approved.')
     else:
         cur.execute("UPDATE reviews SET status = 'rejected' WHERE id = ?", (review_id,))
-        # also recalc product rating to exclude this rejected review
+        # Recalculate product rating and owning seller's rating to exclude this review
         try:
-            cur.execute("SELECT AVG(rating) AS avg_rating FROM reviews WHERE product_id = ? AND status = 'approved'", (r['product_id'],))
-            avg = cur.fetchone()['avg_rating']
-            if avg is None:
-                avg = 0.0
-            cur.execute("UPDATE products SET rating = ? WHERE id = ?", (avg, r['product_id']))
+            recalc_product_rating(conn, r['product_id'])
+            cur.execute("SELECT seller_id FROM products WHERE id = ?", (r['product_id'],))
+            pr = cur.fetchone()
+            if pr and pr['seller_id']:
+                recalc_seller_rating(conn, pr['seller_id'])
         except Exception:
             pass
         flash('Review rejected.')
@@ -1489,11 +1740,21 @@ def admin_product_edit(product_id):
 def admin_product_delete(product_id):
     conn = get_db_connection()
     cur = conn.cursor()
+    # capture seller before deleting so we can update their aggregated rating
+    cur.execute("SELECT seller_id FROM products WHERE id = ?", (product_id,))
+    pr = cur.fetchone()
+    seller_id = pr['seller_id'] if pr else None
     cur.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
     # invalidate cache for this product and sitemap
     _cache.delete(f"product_html:{product_id}")
     _cache.delete('sitemap_xml')
+    # Recalculate seller rating in case all reviews for that seller changed due to product deletion
+    try:
+        if seller_id:
+            recalc_seller_rating(conn, seller_id)
+    except Exception:
+        pass
     conn.close()
     flash("Product deleted.")
     return redirect(url_for('admin_products'))
@@ -1710,6 +1971,7 @@ def seller_product_edit(product_id):
             except Exception:
                 category_id = None
 
+        old_seller_id = product.get('seller_id')
         if image_url is not None:
             cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, image_url = ?, category_id = ? WHERE id = ?",
                         (title, description, price_val, stock_val, image_url, category_id, product_id))
@@ -1720,6 +1982,17 @@ def seller_product_edit(product_id):
         # invalidate cache for this product and sitemap
         _cache.delete(f"product_html:{product_id}")
         _cache.delete('sitemap_xml')
+        # If seller assignment changed (edge case), recalc ratings for affected sellers
+        try:
+            cur.execute("SELECT seller_id FROM products WHERE id = ?", (product_id,))
+            pr = cur.fetchone()
+            new_seller_id = pr['seller_id'] if pr else None
+            if old_seller_id and old_seller_id != new_seller_id:
+                recalc_seller_rating(conn, old_seller_id)
+            if new_seller_id:
+                recalc_seller_rating(conn, new_seller_id)
+        except Exception:
+            pass
         conn.close()
         flash('Product updated.')
         return redirect(url_for('seller_dashboard'))
