@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import send_file
 
-
+#Todo
+#add proper filtering
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', "change_this_to_a_random_secret")
@@ -154,7 +155,8 @@ def contact():
         subject = request.form.get('subject','').strip()
         message = request.form.get('message','').strip()
         # we could log or send to an external service here; but thats effort
-        flash('Thanks for your message — we will get back to you soon.')
+        # tag contact-related flashes with 'contact' so contact page only shows its own messages
+        flash('Thanks for your message — we will get back to you soon.', 'contact')
         return redirect(url_for('contact'))
     return render_template('contact.html')
 
@@ -303,9 +305,30 @@ def ensure_categories_table(conn):
         # if products table doesn't exist yet or other error, skip quietly
         pass
 
+    # create association table for many-to-many product<->category mapping
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS product_categories (
+                product_id INTEGER NOT NULL,
+                category_id INTEGER NOT NULL,
+                PRIMARY KEY (product_id, category_id),
+                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
+                FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE
+            )
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
     # create an index to speed lookups
     try:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id)")
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_product_categories_category_id ON product_categories(category_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_product_categories_product_id ON product_categories(product_id)")
         conn.commit()
     except Exception:
         pass
@@ -425,13 +448,29 @@ def cart_total_items_and_amount(cart):
     total_amount = Decimal("0.00")
     if not cart:
         return total_items, total_amount
-    conn = get_db_connection()
-    cur = conn.cursor()
     ids = list(cart.keys())
-    placeholders = ",".join("?" for _ in ids)
-    cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
-    rows = {str(r["id"]): Decimal(str(r["price"])) for r in cur.fetchall()}
-    conn.close()
+    # Prefer ORM lookup when available
+    rows = {}
+    try:
+        if db is not None:
+            from models import Product
+            prods = Product.query.filter(Product.id.in_([int(i) for i in ids])).all()
+            rows = {str(p.id): Decimal(str(p.price)) for p in prods}
+        else:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            placeholders = ",".join("?" for _ in ids)
+            cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
+            rows = {str(r["id"]): Decimal(str(r["price"])) for r in cur.fetchall()}
+            conn.close()
+    except Exception:
+        # fallback to sqlite path on any ORM error
+        conn = get_db_connection()
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in ids)
+        cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
+        rows = {str(r["id"]): Decimal(str(r["price"])) for r in cur.fetchall()}
+        conn.close()
     for pid, qty in cart.items():
         total_items += qty
         price = rows.get(str(pid), Decimal("0.00"))
@@ -647,65 +686,159 @@ def products():
     if page < 1:
         page = 1
     category_filter = request.args.get('category', '').strip()
-    conn = get_db_connection()
-    cur = conn.cursor()
-    base = """
-     SELECT p.id, p.title, p.description, p.price, p.created_at, 
-         p.stock, p.image_url, u.business_name, u.rating, p.seller_id,
-         c.name AS category_name, c.slug AS category_slug
-        FROM products p 
-        LEFT JOIN users u ON p.seller_id = u.id
-        LEFT JOIN categories c ON p.category_id = c.id
-    """
-    params = []
-    where = ""
-    if search:
-        # group search terms so additional filters (like category) AND correctly apply
-        where = " WHERE (p.title LIKE ? OR p.description LIKE ?)"
-        params.extend([f"%{search}%", f"%{search}%"])
-    # category filter can be a slug or an id
-    if category_filter:
-        if where:
-            where += " AND (c.slug = ? OR p.category_id = ?)"
+    # Use ORM for product listing when available. Keep previous SQL behavior as fallback.
+    try:
+        if db is not None:
+            from models import Product, Category, User
+            # join to seller and category relationships via relationship attributes
+            # avoid passing RelationshipProperty to join() which some linters/type-checkers complain about
+            # SQLAlchemy runtime provides `.query` and relationship attributes like
+            # `seller`/`category`, but static checkers may not have stubs for them.
+            # Silence Pylance/pyright false-positives for this dynamic API.
+            q = Product.query.outerjoin(Product.seller).outerjoin(Product.category)  # type: ignore[attr-defined]
+            if search:
+                term = f"%{search}%"
+                # SQLAlchemy's InstrumentedAttribute supports `.ilike()` at runtime,
+                # but static type checkers (Pylance/pyright) may not have stubs for it
+                # and will raise "attribute not found" errors. Silence that with
+                # a narrow type-ignore so the runtime behavior is unchanged.
+                q = q.filter((Product.title.ilike(term)) | (Product.description.ilike(term)))  # type: ignore[attr-defined]
+            if category_filter:
+                try:
+                    cat_id = int(category_filter)
+                except Exception:
+                    cat_id = None
+                # Build filter conditions carefully: only compare Product.category_id when we have a numeric id.
+                conds = []
+                if cat_id is not None:
+                    conds.append(Product.category_id == cat_id)
+                # Match primary category slug or any linked category via the association table
+                conds.append(Category.slug == category_filter)
+                conds.append(Product.categories.any(Category.slug == category_filter))  # type: ignore[attr-defined]
+                # Combine with OR
+                from sqlalchemy import or_
+                q = q.filter(or_(*conds))
+            if sort == 'price_low':
+                q = q.order_by(Product.price.asc())
+            elif sort == 'price_high':
+                q = q.order_by(Product.price.desc())
+            elif sort == 'title_az':
+                q = q.order_by(Product.title.asc())
+            elif sort == 'title_za':
+                q = q.order_by(Product.title.desc())
+            else:
+                # newest (default)
+                q = q.order_by(Product.created_at.desc())
+
+            total_count = q.count()
+            page_size = 24
+            total_pages = max(1, (int(total_count) + page_size - 1) // page_size)
+            if page > total_pages:
+                page = total_pages
+            offset = (page - 1) * page_size
+            prods = q.limit(page_size).offset(offset).all()
+
+            products = []
+            for p in prods:
+                products.append({
+                    'id': p.id,
+                    'title': p.title,
+                    'description': p.description,
+                    'price': p.price,
+                    'created_at': p.created_at.isoformat() if getattr(p, 'created_at', None) is not None else '',
+                    'stock': p.stock,
+                    'image_url': p.image_url,
+                    'business_name': getattr(p.seller, 'business_name', None) if getattr(p, 'seller', None) else None,
+                    'rating': getattr(p.seller, 'rating', None) if getattr(p, 'seller', None) else None,
+                    'seller_id': p.seller_id,
+                    'category_name': getattr(p.category, 'name', None) if getattr(p, 'category', None) else None,
+                    'category_slug': getattr(p.category, 'slug', None) if getattr(p, 'category', None) else None,
+                })
+
+            # categories for sidebar
+            categories = [ {'id': c.id, 'name': c.name, 'slug': c.slug} for c in Category.query.order_by(Category.name).all() ]
+            return render_template('products.html', products=products, search=search, sort=sort, categories=categories, page=page, total_pages=total_pages, page_size=page_size, total_count=total_count)
         else:
-            where = " WHERE (c.slug = ? OR p.category_id = ?)"
-        params.append(category_filter)
-        try:
-            params.append(int(category_filter))
-        except Exception:
-            params.append(-1)
-    if sort == 'price_low':
-        order = " ORDER BY p.price ASC"
-    elif sort == 'price_high':
-        order = " ORDER BY p.price DESC"
-    else:
-        order = " ORDER BY p.created_at DESC"
-    # compute total count for pagination (reuse same WHERE params)
-    try:
-        count_sql = "SELECT COUNT(*) AS cnt FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id" + where
-        cur.execute(count_sql, params)
-        total_count = cur.fetchone()['cnt'] or 0
-    except Exception:
-        total_count = 0
+            # fallback to original SQL path
+            conn = get_db_connection()
+            cur = conn.cursor()
+            # Use DISTINCT to avoid duplicate rows when a product is linked to multiple categories
+            base = """
+             SELECT DISTINCT p.id, p.title, p.description, p.price, p.created_at, 
+                 p.stock, p.image_url, u.business_name, u.rating, p.seller_id,
+                 c.name AS category_name, c.slug AS category_slug
+                FROM products p 
+                LEFT JOIN users u ON p.seller_id = u.id
+                LEFT JOIN categories c ON p.category_id = c.id
+            """
+            params = []
+            where = ""
+            if search:
+                where = " WHERE (p.title LIKE ? OR p.description LIKE ?)"
+                params.extend([f"%{search}%", f"%{search}%"])
+            if category_filter:
+                # Match either the product's direct category_id, the primary category slug (c.slug),
+                # or any linked category slug from the product_categories join (c2.slug).
+                if where:
+                    where += " AND (c.slug = ? OR p.category_id = ? OR c2.slug = ?)"
+                else:
+                    where = " WHERE (c.slug = ? OR p.category_id = ? OR c2.slug = ?)"
+                params.append(category_filter)
+                try:
+                    params.append(int(category_filter))
+                except Exception:
+                    params.append(-1)
+                # include the slug again for c2.slug
+                params.append(category_filter)
+            if sort == 'price_low':
+                order = " ORDER BY p.price ASC"
+            elif sort == 'price_high':
+                order = " ORDER BY p.price DESC"
+            elif sort == 'title_az':
+                order = " ORDER BY p.title ASC"
+            elif sort == 'title_za':
+                order = " ORDER BY p.title DESC"
+            else:
+                order = " ORDER BY p.created_at DESC"
+            try:
+                # Count distinct products matching the same join/where conditions (include product_categories joins)
+                count_sql = (
+                    "SELECT COUNT(DISTINCT p.id) AS cnt FROM products p LEFT JOIN users u ON p.seller_id = u.id "
+                    "LEFT JOIN categories c ON p.category_id = c.id LEFT JOIN product_categories pc ON pc.product_id = p.id LEFT JOIN categories c2 ON pc.category_id = c2.id"
+                    + where
+                )
+                cur.execute(count_sql, params)
+                total_count = cur.fetchone()['cnt'] or 0
+            except Exception:
+                total_count = 0
 
-    page_size = 24
-    total_pages = max(1, (int(total_count) + page_size - 1) // page_size)
-    if page > total_pages:
-        page = total_pages
-
-    offset = (page - 1) * page_size
-    main_sql = base + where + order + " LIMIT ? OFFSET ?"
-    main_params = list(params) + [page_size, offset]
-    cur.execute(main_sql, main_params)
-    products = cur.fetchall()
-    # also fetch categories for the category menu (may be empty)
-    try:
-        cur.execute("SELECT id, name, slug FROM categories ORDER BY name")
-        categories = cur.fetchall()
+            page_size = 24
+            total_pages = max(1, (int(total_count) + page_size - 1) // page_size)
+            if page > total_pages:
+                page = total_pages
+            offset = (page - 1) * page_size
+            # include joins to product_categories and a second categories alias (c2) so
+            # products assigned via the many-to-many table are matched by slug
+            base = base + " LEFT JOIN product_categories pc ON pc.product_id = p.id LEFT JOIN categories c2 ON pc.category_id = c2.id"
+            main_sql = base + where + order + " LIMIT ? OFFSET ?"
+            main_params = list(params) + [page_size, offset]
+            cur.execute(main_sql, main_params)
+            products = cur.fetchall()
+            try:
+                cur.execute("SELECT id, name, slug FROM categories ORDER BY name")
+                categories = cur.fetchall()
+            except Exception:
+                categories = []
+            conn.close()
+            return render_template('products.html', products=products, search=search, sort=sort, categories=categories, page=page, total_pages=total_pages, page_size=page_size, total_count=total_count)
     except Exception:
-        categories = []
-    conn.close()
-    return render_template('products.html', products=products, search=search, sort=sort, categories=categories, page=page, total_pages=total_pages, page_size=page_size, total_count=total_count)
+        # On any failure, fall back to original SQL implementation to keep site live
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT p.id, p.title, p.description, p.price, p.created_at, p.stock, p.image_url, u.business_name, u.rating, p.seller_id, c.name AS category_name, c.slug AS category_slug FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.created_at DESC LIMIT 24")
+        products = cur.fetchall()
+        conn.close()
+        return render_template('products.html', products=products, search=search, sort=sort, categories=[], page=1, total_pages=1, page_size=24, total_count=len(products))
 
 @app.route('/product/<int:product_id>')
 def product_detail(product_id):
@@ -714,10 +847,11 @@ def product_detail(product_id):
     reviews = []
     try:
         if db is not None:
-            from sqlalchemy.orm import joinedload
             from models import Product, Review
-            # eager-load seller and category to avoid lazy-load DB hits in templates
-            product_obj = Product.query.options(joinedload(Product.seller), joinedload(Product.category)).filter_by(id=product_id).first()
+            # Load product via ORM. We avoid using joinedload here to keep type
+            # checkers and IDE linters happy; templates perform minimal attribute
+            # accesses and performance is acceptable for this app size.
+            product_obj = Product.query.filter_by(id=product_id).first()
             if product_obj:
                 product = {
                     'id': product_obj.id,
@@ -727,11 +861,13 @@ def product_detail(product_id):
                     'stock': product_obj.stock,
                     'image_url': product_obj.image_url,
                     'seller_id': product_obj.seller_id,
+                    'created_at': product_obj.created_at.isoformat() if getattr(product_obj, 'created_at', None) is not None else '',
                     'business_name': getattr(product_obj.seller, 'business_name', None) if product_obj.seller else None,
                     'seller_description': getattr(product_obj.seller, 'seller_description', None) if product_obj.seller else None,
                     'rating': getattr(product_obj.seller, 'rating', None) if product_obj.seller else None,
                     'category_name': getattr(product_obj.category, 'name', None) if product_obj.category else None,
                     'category_slug': getattr(product_obj.category, 'slug', None) if product_obj.category else None,
+                    'categories': [{'name': c.name, 'slug': c.slug} for c in (product_obj.categories.all() if hasattr(product_obj, 'categories') else [])],
                 }
                 # approved reviews
                 rev_objs = Review.query.filter_by(product_id=product_id, status='approved').order_by(Review.created_at.desc()).all()
@@ -755,6 +891,33 @@ def product_detail(product_id):
             if product is None:
                 flash("Product not found.")
                 return redirect(url_for('products'))
+            # load many-to-many categories for this product
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT c.name, c.slug FROM categories c JOIN product_categories pc ON c.id = pc.category_id WHERE pc.product_id = ?", (product_id,))
+                product_categories = cur.fetchall()
+                cats = []
+                for r in product_categories:
+                    try:
+                        cats.append({'name': r['name'], 'slug': r['slug']})
+                    except Exception:
+                        continue
+                # attach categories list to product (sqlite3.Row remains usable for other fields)
+                product = dict(product)
+                product['categories'] = cats
+            except Exception:
+                # fallback: no categories list
+                try:
+                    product = dict(product)
+                    product['categories'] = []
+                except Exception:
+                    pass
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             # fetch approved reviews for this product
             conn = get_db_connection()
             cur = conn.cursor()
@@ -1602,6 +1765,8 @@ def admin_product_new():
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
         seller_id = request.form.get('seller_id') or None
+        # support multiple categories via category_ids (list). Keep legacy category_id for compatibility.
+        category_ids = request.form.getlist('category_ids') or []
         category_id = request.form.get('category_id')
         if category_id is None or category_id == '':
             category_id = None
@@ -1643,6 +1808,17 @@ def admin_product_new():
         cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (seller_id, title, description, price_val, stock_val, image_url, category_id))
         new_id = cur.lastrowid
+        # insert many-to-many category links if provided
+        try:
+            for cid in category_ids:
+                try:
+                    cidi = int(cid)
+                except Exception:
+                    continue
+                cur.execute("INSERT OR IGNORE INTO product_categories (product_id, category_id) VALUES (?, ?)", (new_id, cidi))
+            conn.commit()
+        except Exception:
+            pass
         conn.commit()
         # invalidate sitemap cache and the new product page (defensive)
         _cache.delete('sitemap_xml')
@@ -1671,12 +1847,31 @@ def admin_product_edit(product_id):
         conn.close()
         flash("Product not found.")
         return redirect(url_for('admin_products'))
+    # sqlite3.Row does not implement dict.get used by templates; convert to a plain dict
+    try:
+        product = dict(product)
+    except Exception:
+        # fallback: leave as-is
+        pass
+    # load existing many-to-many category ids for pre-selection in the admin form
+    selected_category_ids = []
+    try:
+        cur.execute("SELECT category_id FROM product_categories WHERE product_id = ?", (product_id,))
+        for r in cur.fetchall():
+            try:
+                selected_category_ids.append(int(r['category_id']))
+            except Exception:
+                continue
+    except Exception:
+        selected_category_ids = []
     if request.method == 'POST':
         title = request.form.get('title','').strip()
         description = request.form.get('description','').strip()
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
         seller_id = request.form.get('seller_id') or None
+        # support multiple categories via category_ids (list). Keep legacy category_id for compatibility.
+        category_ids = request.form.getlist('category_ids') or []
         category_id = request.form.get('category_id')
         if category_id is None or category_id == '':
             category_id = None
@@ -1718,6 +1913,19 @@ def admin_product_edit(product_id):
         else:
             cur.execute("UPDATE products SET seller_id = ?, title = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?",
                 (seller_id, title, description, price_val, stock_val, category_id, product_id))
+        # update many-to-many category associations
+        try:
+            # remove existing links
+            cur.execute("DELETE FROM product_categories WHERE product_id = ?", (product_id,))
+            for cid in category_ids:
+                try:
+                    cidi = int(cid)
+                except Exception:
+                    continue
+                cur.execute("INSERT OR IGNORE INTO product_categories (product_id, category_id) VALUES (?, ?)", (product_id, cidi))
+            conn.commit()
+        except Exception:
+            pass
         # commit and redirect after POST
         conn.commit()
         # invalidate cache for this product and sitemap
@@ -1733,7 +1941,7 @@ def admin_product_edit(product_id):
     cur.execute("SELECT id, name FROM categories ORDER BY name")
     categories = cur.fetchall()
     conn.close()
-    return render_template('admin/product_form.html', product=product, sellers=sellers, categories=categories)
+    return render_template('admin/product_form.html', product=product, sellers=sellers, categories=categories, selected_category_ids=selected_category_ids)
 
 @app.route('/admin/products/<int:product_id>/delete', methods=['POST'])
 @admin_required
@@ -1757,6 +1965,17 @@ def admin_product_delete(product_id):
         pass
     conn.close()
     flash("Product deleted.")
+    return redirect(url_for('admin_products'))
+
+
+@app.route('/admin/backfill_product_categories', methods=['POST'])
+@admin_required
+def admin_backfill_product_categories():
+    """One-time helper: copy non-null products.category_id into product_categories.
+    Inserts missing rows only. Admin-only and idempotent.
+    """
+    # Backfill endpoint removed — functionality intentionally disabled.
+    flash('Backfill operation is not available.')
     return redirect(url_for('admin_products'))
 
 
@@ -1855,6 +2074,8 @@ def seller_product_new():
         description = request.form.get('description','').strip()
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
+        # support multiple categories
+        category_ids = request.form.getlist('category_ids') or []
     # optional image filename/URL provided by seller
         image_url = request.form.get('image_url','').strip() or None
         if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
@@ -1895,6 +2116,17 @@ def seller_product_new():
         cur.execute("INSERT INTO products (seller_id, title, description, price, stock, image_url, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (uid, title, description, price_val, stock_val, image_url, category_id))
         new_id = cur.lastrowid
+        # insert many-to-many links if provided
+        try:
+            for cid in category_ids:
+                try:
+                    cidi = int(cid)
+                except Exception:
+                    continue
+                cur.execute("INSERT OR IGNORE INTO product_categories (product_id, category_id) VALUES (?, ?)", (new_id, cidi))
+            conn.commit()
+        except Exception:
+            pass
         conn.commit()
         # invalidate sitemap and product cache
         _cache.delete('sitemap_xml')
@@ -1937,6 +2169,8 @@ def seller_product_edit(product_id):
         price = request.form.get('price','0').strip()
         stock = request.form.get('stock','0').strip()
         image_url = request.form.get('image_url','').strip() or None
+        # support multiple categories
+        category_ids = request.form.getlist('category_ids') or []
         if image_url and not (image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('/')):
             image_url = f"/static/img/{image_url}"
         # Validate price
@@ -1978,6 +2212,18 @@ def seller_product_edit(product_id):
         else:
             cur.execute("UPDATE products SET title = ?, description = ?, price = ?, stock = ?, category_id = ? WHERE id = ?",
                         (title, description, price_val, stock_val, category_id, product_id))
+        # update many-to-many associations
+        try:
+            cur.execute("DELETE FROM product_categories WHERE product_id = ?", (product_id,))
+            for cid in category_ids:
+                try:
+                    cidi = int(cid)
+                except Exception:
+                    continue
+                cur.execute("INSERT OR IGNORE INTO product_categories (product_id, category_id) VALUES (?, ?)", (product_id, cidi))
+            conn.commit()
+        except Exception:
+            pass
         conn.commit()
         # invalidate cache for this product and sitemap
         _cache.delete(f"product_html:{product_id}")
@@ -1998,10 +2244,21 @@ def seller_product_edit(product_id):
         return redirect(url_for('seller_dashboard'))
 
     # GET: include categories for select
+    # load categories and pre-selected many-to-many ids
     cur.execute("SELECT id, name FROM categories ORDER BY name")
     categories = cur.fetchall()
+    selected_category_ids = []
+    try:
+        cur.execute("SELECT category_id FROM product_categories WHERE product_id = ?", (product_id,))
+        for r in cur.fetchall():
+            try:
+                selected_category_ids.append(int(r['category_id']))
+            except Exception:
+                continue
+    except Exception:
+        selected_category_ids = []
     conn.close()
-    return render_template('seller/product_form.html', product=product, categories=categories)
+    return render_template('seller/product_form.html', product=product, categories=categories, selected_category_ids=selected_category_ids)
 
 
 # Seller: delete product

@@ -4,6 +4,13 @@ from flask_sqlalchemy import SQLAlchemy
 # Instantiate SQLAlchemy here and call db.init_app(app) from application startup.
 db = SQLAlchemy()
 
+# Association table to support many-to-many product <-> category relationship
+product_categories = db.Table(
+    'product_categories',
+    db.Column('product_id', db.Integer, db.ForeignKey('products.id'), primary_key=True),
+    db.Column('category_id', db.Integer, db.ForeignKey('categories.id'), primary_key=True)
+)
+
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -42,7 +49,10 @@ class Product(db.Model):
     rating = db.Column(db.Float, default=0.0)
 
     seller = db.relationship('User', back_populates='products')
-    category = db.relationship('Category', back_populates='products')
+    # legacy single-category relationship (kept for compatibility)
+    category = db.relationship('Category', back_populates='legacy_products')
+    # many-to-many relationship for products belonging to multiple categories
+    categories = db.relationship('Category', secondary=product_categories, back_populates='products', lazy='dynamic')
 
     order_items = db.relationship('OrderItem', back_populates='product', lazy='dynamic')
 
@@ -58,7 +68,10 @@ class Category(db.Model):
     description = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    products = db.relationship('Product', back_populates='category', lazy='dynamic')
+    # legacy_products maps the old Product.category relationship (category_id FK)
+    legacy_products = db.relationship('Product', back_populates='category', lazy='dynamic')
+    # products through the association table (many-to-many)
+    products = db.relationship('Product', secondary=product_categories, back_populates='categories', lazy='dynamic')
 
     def __repr__(self):
         return f"<Category {self.name}>"

@@ -32,8 +32,8 @@
         <li class="nav-item d-lg-none">
           <a class="nav-link" href="{{ url_for('cart_view') }}" data-collapse-nav="1">Cart <span id="cart-count-mobile" class="badge bg-primary ms-2">0</span></a>
         </li>
-        {% if session.get('username') %}
-          <li class="nav-item d-lg-none"><a class="nav-link" href="{{ url_for('logout') }}" data-collapse-nav="1">Log out ({{ session['username'] }})</a></li>
+        {% if session.get('user_id') %}
+          <li class="nav-item d-lg-none"><a class="nav-link" href="{{ url_for('logout') }}" data-collapse-nav="1">Log out ({{ session.get('username') }})</a></li>
         {% else %}
           <li class="nav-item d-lg-none"><a class="nav-link" href="{{ url_for('login') }}" data-collapse-nav="1">Login</a></li>
           <li class="nav-item d-lg-none"><a class="nav-link" href="{{ url_for('register') }}" data-collapse-nav="1">Register</a></li>
@@ -53,9 +53,9 @@
           Cart <span id="cart-count" class="badge bg-primary ms-2">0</span>
         </a>
 
-        {% if session.get('username') %}
+        {% if session.get('user_id') %}
           <div class="text-end user-info mt-2 mt-lg-0">
-            <div>Logged in as <strong>{{ session['username'] }}</strong></div>
+            <div>Logged in as <strong>{{ session.get('username') }}</strong></div>
             <a href="{{ url_for('logout') }}" class="small">Log out</a>
           </div>
         {% else %}

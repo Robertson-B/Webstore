@@ -41,7 +41,13 @@
           {% if product['rating'] %}
             <span class="ms-2 text-warning">★ {{ '%.1f'|format(product['rating']) }}</span>
           {% endif %}
-          {% if product['category_name'] %}
+          {% if product.get('categories') and product['categories']|length > 0 %}
+            <span class="ms-3 text-primary">Categories:
+              {% for c in product['categories'] %}
+                <a href="{{ url_for('products', category=c['slug']) }}">{{ c['name'] }}</a>{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            </span>
+          {% elif product.get('category_name') %}
             <span class="ms-3 text-primary">Category: {{ product['category_name'] }}</span>
           {% endif %}
         </div>

@@ -43,6 +43,20 @@
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
         }
 
+        /* Make product titles a fixed size so cards line up regardless of title length */
+        .listing-card h5 {
+            /* two lines, then ellipsis */
+            display: -webkit-box;
+            line-clamp: 2;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-height: 3.4rem; /* approx 2 lines at 1.7rem line-height */
+            line-height: 1.7rem;
+            margin-bottom: 0.5rem;
+        }
+
         .price {
             color: var(--primary-color);
             font-size: 1.25rem;
@@ -81,68 +95,47 @@
     <!-- search moved to navbar -->
 
     <div class="container">
-        <!-- Category menu -->
+        <!-- Category menu (dropdown) -->
         <div class="mb-3">
-            <div class="d-flex flex-wrap gap-2">
-                <a href="{{ url_for('products', search=search, sort=sort) }}" class="btn btn-sm {% if not request.args.get('category') %}btn-primary{% else %}btn-outline-secondary{% endif %}">All</a>
-                {% if categories %}
-                    {% for c in categories %}
-                        <a href="{{ url_for('products', category=c['slug'], search=search, sort=sort) }}" class="btn btn-sm {% if request.args.get('category')==c['slug'] %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ c['name'] }}</a>
-                    {% endfor %}
-                {% endif %}
-            </div>
+            <form id="category-filter-form" method="get" action="{{ url_for('products') }}" class="d-flex align-items-center gap-2">
+                <input type="hidden" name="search" value="{{ search|e }}">
+                <label for="sort-select" class="visually-hidden">Sort</label>
+                <select id="sort-select" name="sort" class="form-select form-select-sm" style="max-width:220px;">
+                    <option value="newest" {% if sort=='newest' %}selected{% endif %}>Newest</option>
+                    <option value="price_low" {% if sort=='price_low' %}selected{% endif %}>Price: low → high</option>
+                    <option value="price_high" {% if sort=='price_high' %}selected{% endif %}>Price: high → low</option>
+                    <option value="title_az" {% if sort=='title_az' %}selected{% endif %}>Title A → Z</option>
+                    <option value="title_za" {% if sort=='title_za' %}selected{% endif %}>Title Z → A</option>
+                </select>
+                <label for="category-select" class="visually-hidden">Category</label>
+                <select id="category-select" name="category" class="form-select form-select-sm" style="max-width:360px;">
+                    <option value="" {% if not request.args.get('category') %}selected{% endif %}>All categories</option>
+                    {% if categories %}
+                        {% for c in categories %}
+                            <option value="{{ c['slug'] }}" {% if request.args.get('category')==c['slug'] %}selected{% endif %}>{{ c['name'] }}</option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+                <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+            </form>
+            <script>
+                // Auto-submit when either the category or sort dropdown changes
+                (function(){
+                    try{
+                        var form = document.getElementById('category-filter-form');
+                        var csel = document.getElementById('category-select');
+                        var ssel = document.getElementById('sort-select');
+                        if(csel){ csel.addEventListener('change', function(){ form.submit(); }); }
+                        if(ssel){ ssel.addEventListener('change', function(){ form.submit(); }); }
+                    }catch(e){/* noop */}
+                })();
+            </script>
         </div>
         <div class="row">
             {% if products %}
                 {% for p in products %}
                     <div class="col-md-6 col-lg-4">
-                        <div class="listing-card">
-                                                                                                                <h5>
-                                                                                                                    {{ p['title'] }}
-                                                                                                                    {% if p['stock'] is not none %}
-                                                                                                                        {% set s = p['stock']|int %}
-                                                                                                                        {% if s <= 0 %}
-                                                                                                                            <span class="badge bg-danger ms-2">Out of stock</span>
-                                                                                                                        {% elif s == 1 %}
-                                                                                                                            <span class="badge bg-warning text-white ms-2">1 left</span>
-                                                                                                                        {% elif s == 2 %}
-                                                                                                                            <span class="badge bg-warning text-white ms-2">2 left</span>
-                                                                                                                        {% elif s == 3 %}
-                                                                                                                            <span class="badge bg-warning text-white ms-2">3 left</span>
-                                                                                                                        {% elif s < 5 %}
-                                                                                                                            <span class="badge bg-warning text-white ms-2">{{ s }} left</span>
-                                                                                                                        {% endif %}
-                                                                                                                    {% endif %}
-                                                                                                                </h5>
-                                                                                                                <p class="price">${{ '%.2f'|format(p['price']) }}</p>
-                                                                                                                {% if 'image_url' in p.keys() and p['image_url'] %}
-                                                                                                                    <div class="mb-2 text-center">
-                                                                                                                        {% set img = p['image_url'] %}
-                                                                                                                        {% if img.startswith('http://') or img.startswith('https://') or img.startswith('/') %}
-                                                                                                                            <img src="{{ img }}" alt="{{ p['title'] }}" style="max-height:160px; width:100%; object-fit:contain; background:#fff; border:1px solid #eee; padding:6px;">
-                                                                                                                        {% else %}
-                                                                                                                            <img src="{{ url_for('static', filename='img/' ~ img) }}" alt="{{ p['title'] }}" style="max-height:160px; width:100%; object-fit:contain; background:#fff; border:1px solid #eee; padding:6px;">
-                                                                                                                        {% endif %}
-                                                                                                                    </div>
-                                                                                                                {% else %}
-                                                                                                                    <p class="description">{{ (p['description'] or '')[:100] }}{% if (p['description'] or '')|length > 100 %}...{% endif %}</p>
-                                                                                                                {% endif %}
-
-                            <!-- Insert/replace this seller block here -->
-                            <div class="seller-info">
-                                <a href="{{ url_for('seller_profile', seller_id=p['seller_id']) }}" class="text-decoration-none">
-                                    <span class="seller-name">{{ p['business_name'] or p['seller_name'] }}</span>
-                                    {% if p['rating'] %}
-                                        <span class="rating">★ {{ '%.1f'|format(p['rating']) }}</span>
-                                    {% endif %}
-                                </a>
-                            </div>
-
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span class="text-muted">Posted {{ (p['created_at'] or '')[:10] }}</span>
-                                <a href="{{ url_for('product_detail', product_id=p['id']) }}" class="btn btn-sm btn-outline-primary">View Details</a>
-                            </div>
-                        </div>
+                        {% include '_product_card.html' %}
                     </div>
                 {% endfor %}
             {% else %}

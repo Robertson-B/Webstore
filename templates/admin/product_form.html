@@ -53,15 +53,31 @@
           </select>
         </div>
         <div class="col-md-4 mb-3">
-          <label class="form-label">Category</label>
-          <select name="category_id" class="form-select">
-            <option value="">(none)</option>
-            {% if categories %}
+          <label class="form-label">Categories
+            <button id="clear-categories" type="button" class="btn btn-sm btn-link text-danger" title="Clear all" style="vertical-align:middle">&times;</button>
+          </label>
+
+          <div class="form-text mb-2">Select zero or more categories below. Checked boxes will be submitted as <code>category_ids</code>.</div>
+          <div class="category-checkboxes" style="max-height:220px; overflow:auto; border:1px solid #e9ecef; padding:8px; border-radius:6px; background:#fff;">
+            {% if categories and categories|length > 0 %}
               {% for c in categories %}
-                <option value="{{ c['id'] }}" {% if product and product['category_id'] == c['id'] %}selected{% endif %}>{{ c['name'] }}</option>
+                {% set checked = false %}
+                {% if selected_category_ids is defined and c['id'] in selected_category_ids %}
+                  {% set checked = true %}
+                {% elif product and product.get('category_id') == c['id'] %}
+                  {% set checked = true %}
+                {% endif %}
+                <div class="form-check">
+                  <input class="form-check-input category-checkbox" type="checkbox" name="category_ids" value="{{ c['id'] }}" id="cat_{{ c['id'] }}" {% if checked %}checked{% endif %}>
+                  <label class="form-check-label" for="cat_{{ c['id'] }}">{{ c['name'] }}</label>
+                </div>
               {% endfor %}
+            {% else %}
+              <div class="text-muted">No categories defined. Create categories in Admin → Categories first.</div>
             {% endif %}
-          </select>
+          </div>
+          {# legacy single-category input (kept for server compatibility) #}
+          <input type="hidden" name="category_id" id="legacy_category_id" value="{{ product.get('category_id') if product else '' }}">
         </div>
       </div>
       <button class="btn btn-primary">Save</button>
@@ -69,6 +85,26 @@
     </form>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // small script: clear all checkboxes and keep legacy_category_id updated
+    (function(){
+      const clearBtn = document.getElementById('clear-categories');
+      const checkboxes = document.querySelectorAll('.category-checkbox');
+      const legacyInput = document.getElementById('legacy_category_id');
+      function updateLegacy(){
+        const first = document.querySelector('.category-checkbox:checked');
+        legacyInput.value = first ? first.value : '';
+      }
+      if (clearBtn) clearBtn.addEventListener('click', () => {
+        checkboxes.forEach(cb => cb.checked = false);
+        updateLegacy();
+      });
+      // keep legacy updated when checkboxes change
+      checkboxes.forEach(cb => cb.addEventListener('change', updateLegacy));
+      // initialize legacy on load
+      updateLegacy();
+    })();
+  </script>
   {% include 'footer.html' %}
 </body>
 </html>

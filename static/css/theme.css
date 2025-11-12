@@ -65,7 +65,10 @@ a{ color: var(--primary); }
   intentionally specific and may use !important to override earlier declarations. */
 body.dark .navbar { background: var(--surface) !important; color: var(--text) !important; }
 body.dark .navbar .nav-link { color: var(--text) !important; }
-body.dark .hero-section { background: var(--surface) !important; border-bottom-color: rgba(255,255,255,0.04) !important; }
+/* Preserve hero background-image in dark mode; only adjust background color layer
+  so templates that set a background-image (like the homepage hero) keep their image.
+  Using background-color avoids overwriting background-image/background-position. */
+body.dark .hero-section { background-color: var(--surface) !important; border-bottom-color: rgba(255,255,255,0.04) !important; }
 body.dark .listing-card, body.dark .card, body.dark .profile-header, body.dark .seller-header { background: var(--surface) !important; box-shadow: 0 6px 18px var(--card-shadow) !important; color: var(--text) !important; }
 body.dark .listing-card .description, body.dark .listing-card p, body.dark .card p { color: var(--muted) !important; }
 body.dark .price { color: var(--primary) !important; }
@@ -154,4 +157,5 @@ body.dark .hero-section, body.dark .hero-section h1, body.dark .hero-section p {
   background: var(--surface) !important;
   color: var(--text) !important;
 }
+
 
