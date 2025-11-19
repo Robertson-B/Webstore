@@ -1197,6 +1197,26 @@ def register():
         if not username or not email or not password:
             flash("Fill all fields.")
             return redirect(url_for('register'))
+        # Server-side password validation
+        errors = []
+        if len(password) < 8:
+            errors.append('Password must be at least 8 characters long.')
+        if not any(c.islower() for c in password):
+            errors.append('Password must contain a lowercase letter.')
+        if not any(c.isupper() for c in password):
+            errors.append('Password must contain an uppercase letter.')
+        if not any(c.isdigit() for c in password):
+            errors.append('Password must contain a digit.')
+        if not any(not c.isalnum() for c in password):
+            errors.append('Password should include a symbol (e.g. !@#).')
+        # basic common-password blacklist
+        common = {'password','123456','qwerty','letmein','12345678','abc123','password1'}
+        if password.lower() in common:
+            errors.append('That password is too common — choose a different one.')
+        if errors:
+            for e in errors:
+                flash(e, 'register_error')
+            return redirect(url_for('register'))
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE username = ? OR email = ?", (username, email))

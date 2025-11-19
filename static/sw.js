@@ -1,10 +1,14 @@
-const CACHE_NAME = 'cardhaven-v2';
+const CACHE_NAME = 'cardhaven-v4';
 const ASSETS = [
   '/',
   '/offline',
   '/static/manifest.json',
   '/static/img/icons/icon-192.svg',
-  '/static/img/icons/icon-512.svg'
+  '/static/img/icons/icon-512.svg',
+  '/static/img/favicon/desktop-icon.svg',
+  '/static/img/favicon/desktop-icon-192.png',
+  '/static/img/favicon/desktop-icon-512.png',
+  '/static/img/favicon/favicon-v2.ico'
 ];
 
 self.addEventListener('install', event => {

@@ -157,21 +157,21 @@
         #featuredCarousel { position: relative; }
         /* Slider controls for the custom slider */
         #featuredSlider { position: relative; }
-        .slider-viewport { overflow: hidden; outline: none; }
-        .slider-track { gap: 1rem; scroll-snap-type: x mandatory; padding-bottom: 0.25rem; }
-        .slider-item { flex: 0 0 calc(33.333% - 0.666rem); scroll-snap-align: center; }
+        .slider-viewport { overflow-x: auto; overflow-y: hidden; outline: none; }
+        .slider-track { display: flex; gap: 0.75rem; scroll-snap-type: x mandatory; padding-bottom: 0.25rem; align-items: center; justify-content: center; }
+        .slider-item { flex: 0 0 auto; scroll-snap-align: center; }
         .slider-item .listing-card { height: 100%; }
 
-    .slider-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; background: transparent; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-    .slider-btn:focus { outline: 3px solid rgba(0,0,0,0.12); outline-offset: 4px; }
-    .ctrl-icon { width: 28px; height: 28px; }
+        .slider-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; background: transparent; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .slider-btn:focus { outline: 3px solid rgba(0,0,0,0.12); outline-offset: 4px; }
+        .ctrl-icon { width: 28px; height: 28px; }
 
-    /* indicator bars (bottom) */
-    .slider-indicators { margin-top: .75rem; }
-    .btn-indicator { background: none; border: none; padding: 0; cursor: pointer; }
-    .indicator-bar { display: block; width: 48px; height: 6px; background: rgba(0,0,0,0.12); border-radius: 4px; transition: background .18s, transform .18s; }
-    .btn-indicator.active .indicator-bar { background: rgba(0,0,0,0.9); transform: scaleX(1.06); }
-    .btn-indicator:focus .indicator-bar { outline: none; box-shadow: 0 0 0 3px rgba(0,168,126,0.12); }
+        /* indicator thumbnails (bottom) */
+        .slider-indicators { margin-top: .75rem; display:flex; gap: .5rem; align-items: center; justify-content: center; }
+        .btn-indicator { background: none; border: none; padding: 4px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+        .indicator-dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(0,0,0,0.15); transition: background .18s, transform .18s; display: inline-block; }
+        .btn-indicator.active .indicator-dot { background: rgba(0,0,0,0.95); transform: scale(1.35); }
+        .btn-indicator:focus .indicator-dot { box-shadow: 0 0 0 4px rgba(0,168,126,0.08); }
     </style>
 </head>
 <body>
@@ -190,13 +190,80 @@
     <div class="container">
         <h2 class="mb-4">Featured Listings</h2>
 
-        {% if featured_products %}
-            <div class="row">
-                {% for p in featured_products %}
-                    <div class="col-md-4">
-                        {% include '_product_card.html' %}
+        {% if featured_products and featured_products|length > 0 %}
+            {# Carousel showing 3 products per slide #}
+            {% set slides = (featured_products|length + 2) // 3 %}
+            <div id="featuredCarousel" class="carousel slide" data-bs-ride="carousel" data-bs-interval="20000">
+                <div class="carousel-inner">
+                    {% for p in featured_products %}
+                        {% if loop.index0 % 3 == 0 %}
+                            <div class="carousel-item {% if loop.index0 == 0 %}active{% endif %}">
+                                <div class="row justify-content-center">
+                        {% endif %}
+
+                        <div class="col-md-4 d-flex">
+                            <div class="w-100">
+                                {% include '_product_card.html' %}
+                            </div>
+                        </div>
+
+                        {% if loop.index0 % 3 == 2 or loop.last %}
+                                </div>
+                            </div>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+
+                {# Remove side arrows. Add a thumbnail slider beneath that acts as slide controls #}
+                <div id="featuredSlider" class="mt-3">
+                    <div class="slider-viewport">
+                        <div class="slider-track">
+                            {% for i in range(0, slides) %}
+                                {% set first_idx = i * 3 %}
+                                {% set thumb = featured_products[first_idx] %}
+                                <div class="slider-item">
+                                    <button class="btn-indicator" type="button" data-bs-target="#featuredCarousel" data-bs-slide-to="{{ i }}" aria-label="Go to slide {{ i+1 }}">
+                                        <span class="indicator-dot" aria-hidden="true"></span>
+                                    </button>
+                                </div>
+                            {% endfor %}
+                        </div>
                     </div>
-                {% endfor %}
+                </div>
+                <script>
+                    document.addEventListener('DOMContentLoaded', function(){
+                        var carouselEl = document.querySelector('#featuredCarousel');
+                        var indicators = Array.from(document.querySelectorAll('#featuredSlider .btn-indicator'));
+                        if(!carouselEl || indicators.length === 0) return;
+
+                        // helper to set active state
+                        function setActive(index){
+                            indicators.forEach(function(b, i){
+                                if(i === index) b.classList.add('active'); else b.classList.remove('active');
+                            });
+                        }
+
+                        // initial active marker: detect current active carousel item if present
+                        (function(){
+                            var items = Array.from(carouselEl.querySelectorAll('.carousel-item'));
+                            var idx = items.findIndex(function(it){ return it.classList.contains('active'); });
+                            if(idx >= 0) setActive(idx);
+                            else setActive(0);
+                        })();
+
+                        // sync when carousel finishes sliding
+                        carouselEl.addEventListener('slid.bs.carousel', function(){
+                            var items = Array.from(carouselEl.querySelectorAll('.carousel-item'));
+                            var idx = items.findIndex(function(it){ return it.classList.contains('active'); });
+                            if(idx >= 0) setActive(idx);
+                        });
+
+                        // also add click handlers to highlight immediately on user click
+                        indicators.forEach(function(btn, i){
+                            btn.addEventListener('click', function(){ setActive(i); });
+                        });
+                    });
+                </script>
             </div>
         {% else %}
             <div class="col-12 text-center">

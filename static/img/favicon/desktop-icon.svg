@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Desktop icon: existing logo centered on a green rounded square backdrop -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Card Haven desktop icon">
+  <defs>
+    <linearGradient id="bggrad" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#00b98e"/>
+      <stop offset="1" stop-color="#008f6b"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded square background -->
+  <rect width="120" height="120" rx="20" ry="20" fill="url(#bggrad)"/>
+  <!-- place the existing logo svg centered; reference via relative path -->
+  <!-- If the repo's logo.svg is not suitable, this will still render the available file in its place -->
+  <image href="../logo.svg" x="18" y="18" width="84" height="84" preserveAspectRatio="xMidYMid meet" />
+</svg>
