@@ -37,9 +37,15 @@
             <td>{{ p['seller'] or '—' }}</td>
             <td>
               <a href="{{ url_for('admin_product_edit', product_id=p['id']) }}" class="btn btn-sm btn-primary">Edit</a>
-              <form action="{{ url_for('admin_product_delete', product_id=p['id']) }}" method="post" style="display:inline" onsubmit="return confirm('Delete this product?');">
-                <button class="btn btn-sm btn-danger">Delete</button>
-              </form>
+              {% if p['is_active'] is defined and p['is_active']|int == 1 %}
+                <form action="{{ url_for('admin_product_toggle', product_id=p['id']) }}" method="post" style="display:inline; margin-left:.35rem;">
+                  <button class="btn btn-sm btn-warning">Archive</button>
+                </form>
+              {% else %}
+                <form action="{{ url_for('admin_product_toggle', product_id=p['id']) }}" method="post" style="display:inline; margin-left:.35rem;">
+                  <button class="btn btn-sm btn-success">Unarchive</button>
+                </form>
+              {% endif %}
             </td>
           </tr>
         {% else %}

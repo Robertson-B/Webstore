@@ -31,24 +31,24 @@ self.addEventListener('fetch', event => {
   // but for product list/detail pages we prefer cache-first runtime caching
   if (req.mode === 'navigate') {
     const path = url.pathname || '/';
-    // Cache product listing and product detail pages for offline viewing
-    if (path.startsWith('/products') || path.startsWith('/product')) {
-      event.respondWith(
-        caches.match(req).then(cached => {
-          if (cached) return cached;
-          // Not cached yet -> fetch, cache, and return
-          return fetch(req).then(networkRes => {
-            // Only cache successful responses
+      // For product listing and product detail pages use network-first so
+      // changes made on the server (archive/unarchive) are reflected quickly.
+      if (path.startsWith('/products') || path.startsWith('/product')) {
+        event.respondWith(
+          fetch(req).then(networkRes => {
+            // Update runtime cache for offline use when successful
             if (networkRes && networkRes.status === 200) {
               const copy = networkRes.clone();
               caches.open(CACHE_NAME).then(cache => cache.put(req, copy));
             }
             return networkRes;
-          }).catch(() => caches.match('/offline'));
-        })
-      );
-      return;
-    }
+          }).catch(() => {
+            // If network fails, fall back to any cached copy or the offline page
+            return caches.match(req).then(cached => cached || caches.match('/offline'));
+          })
+        );
+        return;
+      }
 
     // default navigation behavior: network-first then offline fallback
     event.respondWith(

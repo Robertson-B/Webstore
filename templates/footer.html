@@ -50,6 +50,26 @@
   }
 </style>
 
+<!-- Easter eggs modal (used by static/js/easter_eggs.js) -->
+<div class="modal fade" id="easterModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Surprise!</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="easterModalBody">
+        <div class="easter-message"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm btn-primary" data-bs-dismiss="modal">Nice</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/easter_eggs.js') }}"></script>
+
 <!-- Service Worker registration for PWA -->
 <script>
   if ('serviceWorker' in navigator) {

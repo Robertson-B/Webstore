@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include 'head_includes.html' %}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Page not found — 404</title>
+  <style>
+    .four-oh-four { text-align:center; padding:6rem 1rem; }
+    .four-oh-four h1 { font-size:4rem; margin-bottom:0.5rem; }
+    .four-oh-four p { font-size:1.25rem; color:var(--muted); }
+    .retro-hint { margin-top:1rem; font-size:0.95rem; }
+  </style>
+</head>
+<body>
+  {% include 'navbar.html' %}
+  <main class="container four-oh-four">
+    <div style="max-width:780px; margin:0 auto; text-align:center;">
+      <h1 style="font-size:4.5rem; margin-bottom:0.25rem;">404</h1>
+      <p style="font-size:1.25rem; color:var(--muted); margin-bottom:1.25rem;">We couldn't find the page you requested.</p>
+
+      <blockquote style="border-left:4px solid rgba(0,0,0,0.08); padding:1rem; background:rgba(0,0,0,0.02); border-radius:6px; font-style:italic; color:inherit;">
+        "This is not the webpage you're looking for."
+        <footer style="margin-top:.5rem; font-style:normal; color:var(--muted);">— A helpful server</footer>
+      </blockquote>
+
+      <div style="margin-top:1.5rem; display:flex; gap:0.75rem; justify-content:center;">
+        <a href="{{ url_for('index') }}" class="btn btn-primary">Return home</a>
+        <a href="{{ url_for('products') }}" class="btn btn-outline-primary">Browse products</a>
+      </div>
+    </div>
+  </main>
+  {% include 'footer.html' %}
+</body>
+</html>

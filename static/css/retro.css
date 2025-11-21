@@ -1,0 +1,48 @@
+/* Retro theme: polished pixel-ish UI with good contrast and readability */
+@font-face{ font-family: 'RetroMono'; src: local('Courier New'); }
+:root{ --retro-bg:#071018; --retro-panel:#07161a; --retro-ink:#7ef1b6; --retro-accent:#ff9b6b; --retro-muted:#98f7d1; }
+body.retro-theme{
+  background: radial-gradient(circle at 10% 10%, rgba(14,30,50,0.65), rgba(7,16,24,1) 60%);
+  color: var(--retro-ink);
+  font-family: 'RetroMono', 'Segoe UI Mono', 'Courier New', monospace !important;
+  -webkit-font-smoothing: antialiased;
+}
+
+.retro-theme a{ color: var(--retro-accent); text-decoration: underline; text-decoration-style: dotted; }
+
+/* Panels and cards: slightly translucent with subtle outline to preserve contrast */
+.retro-theme .navbar, .retro-theme .listing-card, .retro-theme .site-footer-bg, .retro-theme .card {
+  background: linear-gradient(180deg, rgba(10,20,28,0.85), rgba(6,12,16,0.9));
+  color: var(--retro-ink);
+  border: 1px solid rgba(126,241,182,0.06);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+}
+
+/* Buttons: bold neon outlines with readable text */
+.retro-theme .btn, .retro-theme .btn-primary, .retro-theme .btn-outline-primary {
+  background: linear-gradient(180deg, rgba(20,40,34,0.9), rgba(12,24,20,0.9));
+  color: var(--retro-ink) !important;
+  border: 1px solid rgba(126,241,182,0.14) !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.6) inset;
+}
+.retro-theme .btn-primary { background: linear-gradient(90deg, rgba(126,241,182,0.06), rgba(255,155,107,0.04)); }
+.retro-theme .btn-primary:hover { filter: brightness(1.05); }
+
+/* Cards: maintain comfortable padding and readable backgrounds */
+.retro-theme .listing-card, .retro-theme .card { padding: 12px; border-radius: 8px; }
+.retro-theme .listing-card h5, .retro-theme h5 { color: var(--retro-ink); }
+
+/* Scanlines: subtle, non-invasive to avoid visual fatigue */
+.retro-theme::before{
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background-image: linear-gradient(rgba(255,255,255,0.015) 1px, rgba(0,0,0,0) 3px);
+  background-size: 100% 6px; mix-blend-mode: overlay;
+}
+
+/* Small accents and muted text */
+.retro-theme .text-muted { color: rgba(126,241,182,0.55) !important; }
+.retro-theme .badge-retro { background: rgba(255,155,107,0.09); color: var(--retro-ink); border: 1px solid rgba(255,155,107,0.12); }
+
+/* Keep animations minimal for accessibility */
+.retro-theme * { transition: none !important; }

@@ -153,8 +153,10 @@ body.dark .navbar-brand, body.dark .navbar-brand span, body.dark .navbar-brand a
   color: var(--text) !important;
 }
 
+/* Preserve hero background-image in dark mode by changing only background-color.
+   Using 'background' here would override the background-image; use background-color. */
 body.dark .hero-section, body.dark .hero-section h1, body.dark .hero-section p {
-  background: var(--surface) !important;
+  background-color: var(--surface) !important;
   color: var(--text) !important;
 }
 

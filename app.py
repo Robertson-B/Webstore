@@ -115,6 +115,20 @@ def get_db_connection(path=DB_PATH):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    # Ensure legacy databases gain the is_active column for products.
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(products)")
+        cols = [r['name'] for r in cur.fetchall()]
+        if 'is_active' not in cols:
+            try:
+                cur.execute("ALTER TABLE products ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+                conn.commit()
+            except Exception:
+                # Best-effort: if alter fails (older DB layouts), continue without raising
+                pass
+    except Exception:
+        pass
     return conn
 
 
@@ -219,7 +233,7 @@ def sitemap_xml():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT id, created_at FROM products WHERE id IS NOT NULL")
+        cur.execute("SELECT id, created_at FROM products WHERE is_active = 1")
         for r in cur.fetchall():
             pid = r['id']
             lastmod = r.get('created_at') or today
@@ -413,10 +427,19 @@ try:
         try:
             recalc_seller_rating(_conn, r['id'])
         except Exception:
+            # ignore per-seller failures
             pass
     _conn.close()
 except Exception:
     pass
+
+
+@app.errorhandler(404)
+def page_not_found(e):
+    try:
+        return render_template('404.html'), 404
+    except Exception:
+        return ("Not found", 404)
 
 
 # Call the migration helper on startup (best-effort). This must run after
@@ -454,13 +477,13 @@ def cart_total_items_and_amount(cart):
     try:
         if db is not None:
             from models import Product
-            prods = Product.query.filter(Product.id.in_([int(i) for i in ids])).all()
+            prods = Product.query.filter(Product.id.in_([int(i) for i in ids]), Product.is_active == True).all()
             rows = {str(p.id): Decimal(str(p.price)) for p in prods}
         else:
             conn = get_db_connection()
             cur = conn.cursor()
             placeholders = ",".join("?" for _ in ids)
-            cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
+            cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders}) AND is_active = 1", ids)
             rows = {str(r["id"]): Decimal(str(r["price"])) for r in cur.fetchall()}
             conn.close()
     except Exception:
@@ -468,7 +491,7 @@ def cart_total_items_and_amount(cart):
         conn = get_db_connection()
         cur = conn.cursor()
         placeholders = ",".join("?" for _ in ids)
-        cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
+        cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders}) AND is_active = 1", ids)
         rows = {str(r["id"]): Decimal(str(r["price"])) for r in cur.fetchall()}
         conn.close()
     for pid, qty in cart.items():
@@ -568,7 +591,7 @@ def index():
             ).join(Order, OrderItem.order_id == Order.id).group_by(OrderItem.product_id).subquery()
 
             # query products joined to seller and last_sold (nullable)
-            rows = db.session.query(Product, User, last_sold_subq.c.last_sold).outerjoin(User, Product.seller_id == User.id).outerjoin(last_sold_subq, Product.id == last_sold_subq.c.product_id).order_by(last_sold_subq.c.last_sold.desc()).limit(6).all()
+            rows = db.session.query(Product, User, last_sold_subq.c.last_sold).outerjoin(User, Product.seller_id == User.id).outerjoin(last_sold_subq, Product.id == last_sold_subq.c.product_id).filter(Product.is_active == True).order_by(last_sold_subq.c.last_sold.desc()).limit(6).all()
 
             # Transform results into a lightweight dict-like object compatible with templates
             def _to_row(prod, seller, last_sold):
@@ -593,7 +616,7 @@ def index():
             if len(featured) < 6:
                 existing_ids = [r['id'] for r in featured]
                 needed = 6 - len(featured)
-                q = Product.query
+                q = Product.query.filter(Product.is_active == True)
                 if existing_ids:
                     q = q.filter(~Product.id.in_(existing_ids))
                 more = q.order_by(Product.created_at.desc()).limit(needed).all()
@@ -613,6 +636,7 @@ def index():
                 JOIN order_items oi ON oi.product_id = p.id
                 JOIN orders o ON o.id = oi.order_id
                 LEFT JOIN users u ON p.seller_id = u.id
+                WHERE p.is_active = 1
                 GROUP BY p.id
                 ORDER BY last_sold DESC
                 LIMIT 6
@@ -624,10 +648,10 @@ def index():
                 placeholders = ','.join(['?'] * len(existing_ids)) if existing_ids else ''
                 remaining = 6 - len(featured)
                 if existing_ids:
-                    q = f"SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id NOT IN ({placeholders}) ORDER BY p.created_at DESC LIMIT ?"
+                    q = f"SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id NOT IN ({placeholders}) AND p.is_active = 1 ORDER BY p.created_at DESC LIMIT ?"
                     params = [int(i) for i in existing_ids] + [remaining]
                 else:
-                    q = "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id ORDER BY p.created_at DESC LIMIT ?"
+                    q = "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.is_active = 1 ORDER BY p.created_at DESC LIMIT ?"
                     params = [remaining]
                 cur.execute(q, params)
                 more = cur.fetchall()
@@ -639,7 +663,7 @@ def index():
         try:
             conn = get_db_connection()
             cur = conn.cursor()
-            cur.execute("SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id ORDER BY p.created_at DESC LIMIT 6")
+            cur.execute("SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.is_active = 1 ORDER BY p.created_at DESC LIMIT 6")
             featured = cur.fetchall()
             conn.close()
         except Exception:
@@ -656,7 +680,7 @@ def index():
             for pid in rv_ids:
                 try:
                     cur.execute(
-                        "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id = ?",
+                        "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id = ? AND p.is_active = 1",
                         (pid,)
                     )
                     r = cur.fetchone()
@@ -695,7 +719,7 @@ def products():
             # SQLAlchemy runtime provides `.query` and relationship attributes like
             # `seller`/`category`, but static checkers may not have stubs for them.
             # Silence Pylance/pyright false-positives for this dynamic API.
-            q = Product.query.outerjoin(Product.seller).outerjoin(Product.category)  # type: ignore[attr-defined]
+            q = Product.query.outerjoin(Product.seller).outerjoin(Product.category).filter(Product.is_active == True)  # type: ignore[attr-defined]
             if search:
                 term = f"%{search}%"
                 # SQLAlchemy's InstrumentedAttribute supports `.ilike()` at runtime,
@@ -790,6 +814,11 @@ def products():
                     params.append(-1)
                 # include the slug again for c2.slug
                 params.append(category_filter)
+            # Always exclude archived products from public listings
+            if where:
+                where += " AND p.is_active = 1"
+            else:
+                where = " WHERE p.is_active = 1"
             if sort == 'price_low':
                 order = " ORDER BY p.price ASC"
             elif sort == 'price_high':
@@ -835,7 +864,7 @@ def products():
         # On any failure, fall back to original SQL implementation to keep site live
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT p.id, p.title, p.description, p.price, p.created_at, p.stock, p.image_url, u.business_name, u.rating, p.seller_id, c.name AS category_name, c.slug AS category_slug FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.created_at DESC LIMIT 24")
+        cur.execute("SELECT p.id, p.title, p.description, p.price, p.created_at, p.stock, p.image_url, u.business_name, u.rating, p.seller_id, c.name AS category_name, c.slug AS category_slug FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = 1 ORDER BY p.created_at DESC LIMIT 24")
         products = cur.fetchall()
         conn.close()
         return render_template('products.html', products=products, search=search, sort=sort, categories=[], page=1, total_pages=1, page_size=24, total_count=len(products))
@@ -851,7 +880,7 @@ def product_detail(product_id):
             # Load product via ORM. We avoid using joinedload here to keep type
             # checkers and IDE linters happy; templates perform minimal attribute
             # accesses and performance is acceptable for this app size.
-            product_obj = Product.query.filter_by(id=product_id).first()
+            product_obj = Product.query.filter_by(id=product_id, is_active=True).first()
             if product_obj:
                 product = {
                     'id': product_obj.id,
@@ -884,7 +913,7 @@ def product_detail(product_id):
              FROM products p
              LEFT JOIN users u ON p.seller_id = u.id
              LEFT JOIN categories c ON p.category_id = c.id
-             WHERE p.id = ?
+             WHERE p.id = ? AND p.is_active = 1
             """, (product_id,))
             product = cur.fetchone()
             conn.close()
@@ -939,7 +968,7 @@ def product_detail(product_id):
              FROM products p
              LEFT JOIN users u ON p.seller_id = u.id
              LEFT JOIN categories c ON p.category_id = c.id
-             WHERE p.id = ?
+             WHERE p.id = ? AND p.is_active = 1
             """, (product_id,))
             product = cur.fetchone()
             conn.close()
@@ -1041,7 +1070,7 @@ def cart_view():
         conn = get_db_connection()
         cur = conn.cursor()
         for pid, qty in cart.items():
-            cur.execute("SELECT id, title, price FROM products WHERE id = ?", (pid,))
+            cur.execute("SELECT id, title, price FROM products WHERE id = ? AND is_active = 1", (pid,))
             product = cur.fetchone()
             if product:
                 items.append({
@@ -1062,7 +1091,7 @@ def cart_view():
             for pid in rv_ids:
                 try:
                     cur.execute(
-                        "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id = ?",
+                        "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id = ? AND p.is_active = 1",
                         (pid,)
                     )
                     r = cur.fetchone()
@@ -1085,7 +1114,7 @@ def cart_add():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT id, stock FROM products WHERE id = ?", (product_id,))
+        cur.execute("SELECT id, stock FROM products WHERE id = ? AND is_active = 1", (product_id,))
         prod = cur.fetchone()
     finally:
         conn.close()
@@ -1164,7 +1193,7 @@ def cart_update():
             continue
 
         # check stock for this product
-        cur.execute("SELECT stock FROM products WHERE id = ?", (prod_id,))
+        cur.execute("SELECT stock FROM products WHERE id = ? AND is_active = 1", (prod_id,))
         r = cur.fetchone()
         if r and r['stock'] is not None:
             stock = r['stock']
@@ -1281,7 +1310,7 @@ def checkout():
     # build items list for display and compute total (include stock for checks)
     ids = list(cart.keys())
     placeholders = ",".join("?" for _ in ids)
-    cur.execute(f"SELECT id, title, price, stock, seller_id FROM products WHERE id IN ({placeholders})", ids)
+    cur.execute(f"SELECT id, title, price, stock, seller_id FROM products WHERE id IN ({placeholders}) AND is_active = 1", ids)
     rows = {str(r["id"]): r for r in cur.fetchall()}
     items = []
     total = 0.0
@@ -1425,7 +1454,7 @@ def seller_profile(seller_id):
     products = []
     if seller:
         cur.execute(
-            "SELECT id, title, description, price, stock, created_at, image_url FROM products WHERE seller_id = ? ORDER BY created_at DESC",
+            "SELECT id, title, description, price, stock, created_at, image_url FROM products WHERE seller_id = ? AND is_active = 1 ORDER BY created_at DESC",
             (seller_id,)
         )
         products = cur.fetchall()
@@ -1526,7 +1555,7 @@ def admin_index():
     ensure_reviews_table(conn)
     cur.execute("""
         SELECT
-          (SELECT COUNT(*) FROM products) AS products_count,
+          (SELECT COUNT(*) FROM products WHERE is_active = 1) AS products_count,
           (SELECT COUNT(*) FROM users) AS users_count,
           (SELECT COUNT(*) FROM orders) AS orders_count,
           (SELECT COUNT(*) FROM seller_applications WHERE status IS NULL OR status = 'pending') AS pending_applications,
@@ -1679,7 +1708,7 @@ def admin_seller_application_action(app_id, action):
 def admin_products():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT p.id, p.title, p.price, p.stock, u.username AS seller, c.name AS category FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.created_at DESC")
+    cur.execute("SELECT p.id, p.title, p.price, p.stock, p.is_active, u.username AS seller, c.name AS category FROM products p LEFT JOIN users u ON p.seller_id = u.id LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.created_at DESC")
     products = cur.fetchall()
     conn.close()
     return render_template('admin/products.html', products=products)
@@ -1972,19 +2001,75 @@ def admin_product_delete(product_id):
     cur.execute("SELECT seller_id FROM products WHERE id = ?", (product_id,))
     pr = cur.fetchone()
     seller_id = pr['seller_id'] if pr else None
-    cur.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    # Prevent deleting products that are referenced by order_items (historical orders)
+    try:
+        cur.execute("SELECT COUNT(1) AS cnt FROM order_items WHERE product_id = ?", (product_id,))
+        cnt = cur.fetchone()['cnt']
+        if cnt and int(cnt) > 0:
+            conn.close()
+            flash('Cannot delete product: it appears in past orders. Consider archiving or disabling it instead.')
+            return redirect(url_for('admin_products'))
+    except Exception:
+        # if the check fails, continue to attempt deletion (best-effort)
+        pass
+
+    # Archive the product instead of deleting
+    cur.execute("UPDATE products SET is_active = 0 WHERE id = ?", (product_id,))
     conn.commit()
     # invalidate cache for this product and sitemap
     _cache.delete(f"product_html:{product_id}")
     _cache.delete('sitemap_xml')
-    # Recalculate seller rating in case all reviews for that seller changed due to product deletion
+    # Recalculate seller rating in case reviews or product visibility changed
     try:
         if seller_id:
             recalc_seller_rating(conn, seller_id)
     except Exception:
         pass
     conn.close()
-    flash("Product deleted.")
+    # Write a short debug log entry so we can confirm the route was reached and DB updated
+    try:
+        with open(os.path.join(os.path.dirname(__file__), 'archive.log'), 'a', encoding='utf-8') as _lf:
+            _lf.write(f"{datetime.utcnow().isoformat()}\tadmin\tarchived\t{product_id}\n")
+    except Exception:
+        pass
+    # If this was an AJAX request, return JSON so the client can handle it without redirects
+    wants_json = (request.headers.get('X-Requested-With') == 'XMLHttpRequest') or request.is_json or request.headers.get('Accept','').lower().find('application/json') != -1
+    if wants_json:
+        return jsonify({'ok': True, 'archived': True, 'product_id': product_id})
+    flash("Product archived.")
+    return redirect(url_for('admin_products'))
+
+
+@app.route('/admin/products/<int:product_id>/toggle_archive', methods=['POST'])
+@admin_required
+def admin_product_toggle(product_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT is_active, seller_id FROM products WHERE id = ?", (product_id,))
+    p = cur.fetchone()
+    if not p:
+        conn.close()
+        flash('Product not found.')
+        return redirect(url_for('admin_products'))
+    try:
+        current = int(p['is_active']) if p['is_active'] is not None else 1
+    except Exception:
+        current = 1
+    new_state = 0 if current == 1 else 1
+    cur.execute("UPDATE products SET is_active = ? WHERE id = ?", (new_state, product_id))
+    conn.commit()
+    _cache.delete(f"product_html:{product_id}")
+    _cache.delete('sitemap_xml')
+    try:
+        if p['seller_id']:
+            recalc_seller_rating(conn, p['seller_id'])
+    except Exception:
+        pass
+    conn.close()
+    wants_json = (request.headers.get('X-Requested-With') == 'XMLHttpRequest') or request.is_json or request.headers.get('Accept','').lower().find('application/json') != -1
+    if wants_json:
+        return jsonify({'ok': True, 'product_id': product_id, 'is_active': new_state})
+    flash('Product archived.' if new_state == 0 else 'Product restored.')
     return redirect(url_for('admin_products'))
 
 
@@ -1997,6 +2082,32 @@ def admin_backfill_product_categories():
     # Backfill endpoint removed — functionality intentionally disabled.
     flash('Backfill operation is not available.')
     return redirect(url_for('admin_products'))
+
+
+# Development-only helper: archive a product without auth when explicitly enabled.
+# Enable by setting environment variable DEV_ALLOW_UNAUTH_ARCHIVE=1 in your dev environment.
+@app.route('/dev/archive/<int:product_id>', methods=['GET', 'POST'])
+def dev_archive_product(product_id):
+    if os.environ.get('DEV_ALLOW_UNAUTH_ARCHIVE', '') != '1':
+        return Response('Not enabled', status=403)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, title, is_active FROM products WHERE id = ?', (product_id,))
+    p = cur.fetchone()
+    if not p:
+        conn.close()
+        return jsonify({'ok': False, 'error': 'Product not found'}), 404
+    try:
+        cur.execute('UPDATE products SET is_active = 0 WHERE id = ?', (product_id,))
+        conn.commit()
+        try:
+            with open(os.path.join(os.path.dirname(__file__), 'archive.log'), 'a', encoding='utf-8') as _lf:
+                _lf.write(f"{datetime.utcnow().isoformat()}\tdev\tarchived\t{product_id}\n")
+        except Exception:
+            pass
+        return jsonify({'ok': True, 'archived': True, 'product_id': product_id})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 # Serve service worker from root so it controls the whole origin
@@ -2013,19 +2124,19 @@ def service_worker():
         return ('', 404)
 
 
-    @app.route('/set-theme', methods=['POST'])
-    def set_theme():
-        try:
-            data = request.get_json() or {}
-            theme = data.get('theme')
-            if theme not in ('light', 'dark', 'system'):
-                return jsonify({'error': 'invalid theme'}), 400
-            resp = jsonify({'ok': True})
-            # set cookie for 1 year
-            resp.set_cookie('theme', theme, max_age=60*60*24*365, samesite='Lax')
-            return resp
-        except Exception:
-            return jsonify({'error': 'server error'}), 500
+@app.route('/set-theme', methods=['POST'])
+def set_theme():
+    try:
+        data = request.get_json() or {}
+        theme = data.get('theme')
+        if theme not in ('light', 'dark', 'system'):
+            return jsonify({'error': 'invalid theme'}), 400
+        resp = jsonify({'ok': True})
+        # set cookie for 1 year
+        resp.set_cookie('theme', theme, max_age=60*60*24*365, samesite='Lax')
+        return resp
+    except Exception:
+        return jsonify({'error': 'server error'}), 500
 
 
 # Seller-only decorator
@@ -2057,7 +2168,7 @@ def seller_dashboard():
     cur = conn.cursor()
     cur.execute("SELECT id, username, business_name, seller_description, logo_url FROM users WHERE id = ?", (uid,))
     seller = cur.fetchone()
-    cur.execute("SELECT id, title, price, stock, created_at, image_url FROM products WHERE seller_id = ? ORDER BY created_at DESC", (uid,))
+    cur.execute("SELECT id, title, price, stock, created_at, image_url, is_active FROM products WHERE seller_id = ? ORDER BY created_at DESC", (uid,))
     products = cur.fetchall()
     # Seller analytics: recent sales and top products
     try:
@@ -2299,13 +2410,74 @@ def seller_product_delete(product_id):
         conn.close()
         flash('Not authorized to delete this product.')
         return redirect(url_for('seller_dashboard'))
-    cur.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    # Prevent deleting products that appear in past orders (referential integrity)
+    try:
+        cur.execute("SELECT COUNT(1) AS cnt FROM order_items WHERE product_id = ?", (product_id,))
+        cnt = cur.fetchone()['cnt']
+        if cnt and int(cnt) > 0:
+            conn.close()
+            flash('Cannot delete product: it appears in past orders. Please archive or disable the product instead.')
+            return redirect(url_for('seller_dashboard'))
+    except Exception:
+        # if check fails, fall back to attempting delete (best-effort)
+        pass
+
+    # Archive the product instead of deleting
+    cur.execute("UPDATE products SET is_active = 0 WHERE id = ?", (product_id,))
     conn.commit()
     # invalidate cache for this product and sitemap
     _cache.delete(f"product_html:{product_id}")
     _cache.delete('sitemap_xml')
     conn.close()
-    flash('Product deleted.')
+    # Write debug log for seller archive actions
+    try:
+        with open(os.path.join(os.path.dirname(__file__), 'archive.log'), 'a', encoding='utf-8') as _lf:
+            _lf.write(f"{datetime.utcnow().isoformat()}\tseller\tarchived\t{product_id}\tuser={uid}\n")
+    except Exception:
+        pass
+    wants_json = (request.headers.get('X-Requested-With') == 'XMLHttpRequest') or request.is_json or request.headers.get('Accept','').lower().find('application/json') != -1
+    if wants_json:
+        return jsonify({'ok': True, 'archived': True, 'product_id': product_id})
+    flash('Product archived.')
+    return redirect(url_for('seller_dashboard'))
+
+
+@app.route('/seller/products/<int:product_id>/toggle_archive', methods=['POST'])
+@login_required
+@seller_required
+def seller_product_toggle(product_id):
+    uid = session.get('user_id')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT is_active, seller_id FROM products WHERE id = ?", (product_id,))
+    p = cur.fetchone()
+    if not p:
+        conn.close()
+        flash('Product not found.')
+        return redirect(url_for('seller_dashboard'))
+    if p['seller_id'] != uid:
+        conn.close()
+        flash('Not authorized to modify this product.')
+        return redirect(url_for('seller_dashboard'))
+    try:
+        current = int(p['is_active']) if p['is_active'] is not None else 1
+    except Exception:
+        current = 1
+    new_state = 0 if current == 1 else 1
+    cur.execute("UPDATE products SET is_active = ? WHERE id = ?", (new_state, product_id))
+    conn.commit()
+    _cache.delete(f"product_html:{product_id}")
+    _cache.delete('sitemap_xml')
+    try:
+        if p['seller_id']:
+            recalc_seller_rating(conn, p['seller_id'])
+    except Exception:
+        pass
+    conn.close()
+    wants_json = (request.headers.get('X-Requested-With') == 'XMLHttpRequest') or request.is_json or request.headers.get('Accept','').lower().find('application/json') != -1
+    if wants_json:
+        return jsonify({'ok': True, 'product_id': product_id, 'is_active': new_state})
+    flash('Product archived.' if new_state == 0 else 'Product restored.')
     return redirect(url_for('seller_dashboard'))
 
 # User management

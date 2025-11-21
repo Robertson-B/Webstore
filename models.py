@@ -45,6 +45,7 @@ class Product(db.Model):
     stock = db.Column(db.BigInteger)
     image_url = db.Column(db.String(1024))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_active = db.Column(db.Boolean, default=True)
     category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=True)
     rating = db.Column(db.Float, default=0.0)
 

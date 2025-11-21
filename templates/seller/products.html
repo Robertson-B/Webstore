@@ -48,9 +48,11 @@
                 {% endif %}
                 <div class="d-flex gap-2">
                   <a href="{{ url_for('seller_product_edit', product_id=p['id']) }}" class="btn btn-sm btn-primary">Edit</a>
-                  <form method="post" action="{{ url_for('seller_product_delete', product_id=p['id']) }}" style="display:inline" onsubmit="return confirm('Delete this product?');">
-                    <button class="btn btn-sm btn-outline-danger">Delete</button>
-                  </form>
+                  {% if p['is_active'] is defined %}
+                    <form method="post" action="{{ url_for('seller_product_toggle', product_id=p['id']) }}" style="display:inline;">
+                      <button type="submit" class="btn btn-sm {% if p['is_active']|int == 1 %}btn-warning{% else %}btn-success{% endif %}">{% if p['is_active']|int == 1 %}Archive{% else %}Unarchive{% endif %}</button>
+                    </form>
+                  {% endif %}
                 </div>
               </div>
             </div>

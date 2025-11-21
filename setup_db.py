@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS products (
     stock INTEGER DEFAULT 0,
     image_url TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    is_active INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY(seller_id) REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE TABLE IF NOT EXISTS orders (
