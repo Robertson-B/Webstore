@@ -1566,6 +1566,36 @@ def admin_index():
     return render_template('admin/dashboard.html', stats=stats)
 
 
+@app.route('/fong')
+@login_required
+def fong_page():
+    # Only allow the special dev user 'fong' to access this page.
+    uname = session.get('username', '') or ''
+    # If username wasn't set in session for some reason, fall back to DB lookup by user_id.
+    if not uname and session.get('user_id'):
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT username FROM users WHERE id = ?", (session.get('user_id'),))
+            row = cur.fetchone()
+            if row and row.get('username'):
+                uname = row['username']
+            conn.close()
+        except Exception:
+            # ignore DB failures here; we'll deny access below if we can't determine username
+            pass
+
+    try:
+        allowed = (uname.strip().lower() == 'fong')
+    except Exception:
+        allowed = False
+    if not allowed:
+        flash('Access denied.')
+        return redirect(url_for('index'))
+    # Provide a page that welcomes fong and shows some fun links
+    return render_template('fong.html', username=uname)
+
+
 @app.route('/admin/orders')
 @admin_required
 def admin_orders():

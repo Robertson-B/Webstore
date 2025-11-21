@@ -16,9 +16,12 @@
     </button>
 
     <div class="collapse navbar-collapse" id="mainNav">
-      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-        <li class="nav-item"><a class="nav-link" href="/about">About</a></li>
-  <li class="nav-item"><a class="nav-link" href="/products">Browse</a></li>
+        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+          <li class="nav-item"><a class="nav-link" href="/about">About</a></li>
+        <li class="nav-item"><a class="nav-link" href="/products">Browse</a></li>
+          {% if session.get('username','')|lower == 'fong' %}
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('fong_page') }}">Fong</a></li>
+          {% endif %}
         {% if current_user_is_seller %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('seller_dashboard') }}">Seller Dashboard</a></li>
         {% endif %}

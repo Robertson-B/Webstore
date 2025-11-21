@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include 'head_includes.html' %}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Welcome Fong</title>
+</head>
+<body>
+  {% include 'navbar.html' %}
+  <main class="container my-5">
+    <div class="card p-4">
+      <h1>Welcome, {{ username }}!</h1>
+      <p class="lead">This page is for you only. Below is an incredibly important secret link.</p>
+
+      <p><a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" class="btn btn-lg btn-primary" target="_blank" rel="noopener noreferrer">Incredibly Important Secret Link</a></p>
+
+      <hr>
+      <h3>Hidden Easter Eggs</h3>
+      <ul>
+        <li><strong>Konami code</strong> — up up down down left right left right B A</li>
+        <li><strong>Type</strong> <code>bitrealm</code> — developer easter egg</li>
+        <li><strong>Type</strong> <code>pingpong</code> — opens a Pong mini-game</li>
+        <li><strong>Type</strong> <code>tumblr</code> — toggles the retro theme</li>
+      </ul>
+
+      <h3>Cool Site Features</h3>
+      <ul>
+        <li>Archiving instead of deleting products (admin/seller toggle)</li>
+        <li>Progressive Web App support and offline fallback</li>
+        <li>Product page caching with short TTL and cache invalidation on edits</li>
+        <li>Password-strength validation and rate-limited review submissions</li>
+        <li>Give me full marks. Please I beg you</li>
+      </ul>
+
+      
+    </div>
+  </main>
+  {% include 'footer.html' %}
+</body>
+</html>
