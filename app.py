@@ -236,7 +236,10 @@ def sitemap_xml():
         cur.execute("SELECT id, created_at FROM products WHERE is_active = 1")
         for r in cur.fetchall():
             pid = r['id']
-            lastmod = r.get('created_at') or today
+            try:
+                lastmod = r['created_at'] or today
+            except Exception:
+                lastmod = today
             # normalize to date only if it's a datetime-like string
             try:
                 lastmod = lastmod.split(' ')[0]
@@ -1265,14 +1268,21 @@ def checkout():
     placeholders = ",".join("?" for _ in ids)
     cur.execute(f"SELECT id, title, price, stock, seller_id FROM products WHERE id IN ({placeholders}) AND is_active = 1", ids)
     rows = {str(r["id"]): r for r in cur.fetchall()}
+    from decimal import Decimal
     items = []
-    total = 0.0
+    total = Decimal('0.00')
     for pid, qty in cart.items():
         r = rows.get(str(pid))
         if not r:
             continue
-        line_total = float(r["price"]) * qty
-        items.append({"product": r, "quantity": qty, "line_total": line_total})
+        # Use Decimal for currency arithmetic (safer than float)
+        try:
+            unit_price = Decimal(str(r['price']))
+        except Exception:
+            # fallback to 0.00 if price is malformed
+            unit_price = Decimal('0.00')
+        line_total = unit_price * Decimal(int(qty))
+        items.append({"product": r, "quantity": qty, "line_total": float(line_total)})
         total += line_total
 
     if request.method == 'POST':
@@ -1306,11 +1316,14 @@ def checkout():
             conn.close()
             return redirect(url_for('cart_view'))
 
-        # create order
+        # create order (include shipping)
         buyer_id = session.get('user_id')
+        # add flat shipping fee
+        shipping_fee = Decimal('5.00')
+        total_with_shipping = total + shipping_fee
         cur.execute(
             "INSERT INTO orders (buyer_id, buyer_name, buyer_email, shipping_address, total) VALUES (?, ?, ?, ?, ?)",
-            (buyer_id, name, email, address, total)
+            (buyer_id, name, email, address, float(total_with_shipping))
         )
         order_id = cur.lastrowid
 
@@ -1327,7 +1340,11 @@ def checkout():
             prod = rows.get(str(pid))
             if not prod:
                 continue
-            unit_price = float(prod['price'])
+            # store unit_price as float for DB (serialize Decimal safely)
+            try:
+                unit_price = float(Decimal(str(prod['price'])))
+            except Exception:
+                unit_price = 0.0
             cur.execute("INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?)",
                         (order_id, int(pid), qty, unit_price))
             # decrement stock if not NULL
@@ -1350,7 +1367,10 @@ def checkout():
     conn.close()
     pre_name = u['username'] if u else ''
     pre_email = u['email'] if u else ''
-    return render_template('checkout.html', items=items, total_amount=total, pre_name=pre_name, pre_email=pre_email)
+    # include shipping in the displayed total
+    shipping_fee = Decimal('5.00')
+    total_with_shipping = total + shipping_fee
+    return render_template('checkout.html', items=items, total_amount=float(total_with_shipping), shipping_fee=float(shipping_fee), pre_name=pre_name, pre_email=pre_email)
 
 # new route: order confirmation
 @app.route('/order/<int:order_id>')
@@ -1372,7 +1392,26 @@ def order_confirmation(order_id):
     """, (order_id,))
     items = cur.fetchall()
     conn.close()
-    return render_template('order_confirmation.html', order=order, items=items)
+    # compute subtotal and shipping (order.total stores total_with_shipping)
+    try:
+        subtotal = 0.0
+        for it in items:
+            subtotal += float(it['unit_price']) * int(it['quantity'])
+        try:
+            # order is a sqlite3.Row; use indexing safely
+            total = float(order['total']) if order and (order['total'] is not None) else subtotal
+        except Exception:
+            total = subtotal
+        shipping = max(0.0, total - subtotal)
+    except Exception:
+        subtotal = 0.0
+        shipping = 0.0
+        try:
+            total = float(order['total']) if order and (order['total'] is not None) else 0.0
+        except Exception:
+            total = 0.0
+
+    return render_template('order_confirmation.html', order=order, items=items, subtotal=subtotal, shipping=shipping, total=total)
 
 @app.route('/addresses')
 def address_suggestions():
@@ -1531,8 +1570,12 @@ def fong_page():
             cur = conn.cursor()
             cur.execute("SELECT username FROM users WHERE id = ?", (session.get('user_id'),))
             row = cur.fetchone()
-            if row and row.get('username'):
-                uname = row['username']
+            if row:
+                try:
+                    if row['username']:
+                        uname = row['username']
+                except Exception:
+                    pass
             conn.close()
         except Exception:
             # ignore DB failures here; we'll deny access below if we can't determine username

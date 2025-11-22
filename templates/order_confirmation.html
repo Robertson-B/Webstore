@@ -19,7 +19,6 @@
     <table class="table">
       <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Line</th></tr></thead>
       <tbody>
-        {% set total = 0 %}
         {% for it in items %}
           <tr>
             <td>{{ it['title'] }}</td>
@@ -27,8 +26,15 @@
             <td>${{ '%.2f'|format(it['unit_price']) }}</td>
             <td>${{ '%.2f'|format(it['unit_price'] * it['quantity']) }}</td>
           </tr>
-          {% set total = total + (it['unit_price'] * it['quantity']) %}
         {% endfor %}
+        <tr>
+          <td colspan="3" class="text-end">Subtotal</td>
+          <td>${{ '%.2f'|format(subtotal) }}</td>
+        </tr>
+        <tr>
+          <td colspan="3" class="text-end">Shipping</td>
+          <td>${{ '%.2f'|format(shipping) }}</td>
+        </tr>
         <tr class="fw-bold">
           <td colspan="3" class="text-end">Total</td>
           <td>${{ '%.2f'|format(total) }}</td>

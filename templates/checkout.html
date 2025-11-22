@@ -23,6 +23,7 @@
         <li>{{ it.quantity }} × {{ it.product['title'] }} — ${{ '%.2f'|format(it.line_total) }}</li>
       {% endfor %}
     </ul>
+    <p>Shipping: <strong>${{ '%.2f'|format(shipping_fee) }}</strong></p>
     <p><strong>Total: ${{ '%.2f'|format(total_amount) }}</strong></p>
 
     <form method="post" id="checkout-form">
