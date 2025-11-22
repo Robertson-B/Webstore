@@ -579,22 +579,14 @@ def index():
     featured = []
     try:
         if db is not None:
-            # Use ORM: find up to 6 products ordered by their most recent sale timestamp.
-            # If there are fewer than 6 sold products, backfill with recently created products.
+            # Use ORM: pick 6 random active products to feature.
             from sqlalchemy import func
-            from models import Product, User, OrderItem, Order
+            from models import Product
 
-            # subquery: last sold timestamp per product
-            last_sold_subq = db.session.query(
-                OrderItem.product_id.label('product_id'),
-                func.max(Order.created_at).label('last_sold')
-            ).join(Order, OrderItem.order_id == Order.id).group_by(OrderItem.product_id).subquery()
+            prods = Product.query.filter(Product.is_active == True).order_by(func.random()).limit(6).all()
 
-            # query products joined to seller and last_sold (nullable)
-            rows = db.session.query(Product, User, last_sold_subq.c.last_sold).outerjoin(User, Product.seller_id == User.id).outerjoin(last_sold_subq, Product.id == last_sold_subq.c.product_id).filter(Product.is_active == True).order_by(last_sold_subq.c.last_sold.desc()).limit(6).all()
-
-            # Transform results into a lightweight dict-like object compatible with templates
-            def _to_row(prod, seller, last_sold):
+            def _to_row(prod):
+                seller = getattr(prod, 'seller', None)
                 return {
                     'id': prod.id,
                     'title': prod.title,
@@ -607,56 +599,16 @@ def index():
                     'business_name': getattr(seller, 'business_name', None) if seller else None,
                     'rating': getattr(seller, 'rating', None) if seller else None,
                     'seller_username': getattr(seller, 'username', None) if seller else None,
-                    'last_sold': last_sold
+                    'last_sold': None
                 }
 
-            featured = [_to_row(p, s, ls) for p, s, ls in rows]
-
-            # Backfill with recently created products if needed
-            if len(featured) < 6:
-                existing_ids = [r['id'] for r in featured]
-                needed = 6 - len(featured)
-                q = Product.query.filter(Product.is_active == True)
-                if existing_ids:
-                    q = q.filter(~Product.id.in_(existing_ids))
-                more = q.order_by(Product.created_at.desc()).limit(needed).all()
-                featured += [_to_row(p, getattr(p, 'seller', None), None) for p in more]
+            featured = [_to_row(p) for p in prods]
         else:
-            # fallback: use sqlite3 raw SQL as before
+            # fallback: use sqlite3 raw SQL to select 6 random active products
             conn = get_db_connection()
             cur = conn.cursor()
-            # Select up to 6 products ordered by the timestamp of their most recent sale.
-            # We prefer recently sold items; if fewer than 6 products have sales, backfill
-            # with recently created products to reach 6 items.
-            cur.execute("""
-                SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url,
-                       u.business_name, u.rating, u.username AS seller_username,
-                       MAX(o.created_at) AS last_sold
-                FROM products p
-                JOIN order_items oi ON oi.product_id = p.id
-                JOIN orders o ON o.id = oi.order_id
-                LEFT JOIN users u ON p.seller_id = u.id
-                WHERE p.is_active = 1
-                GROUP BY p.id
-                ORDER BY last_sold DESC
-                LIMIT 6
-            """)
+            cur.execute("SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.is_active = 1 ORDER BY RANDOM() LIMIT 6")
             featured = cur.fetchall()
-            # Backfill with recently created products if needed
-            if len(featured) < 6:
-                existing_ids = [str(r['id']) for r in featured]
-                placeholders = ','.join(['?'] * len(existing_ids)) if existing_ids else ''
-                remaining = 6 - len(featured)
-                if existing_ids:
-                    q = f"SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.id NOT IN ({placeholders}) AND p.is_active = 1 ORDER BY p.created_at DESC LIMIT ?"
-                    params = [int(i) for i in existing_ids] + [remaining]
-                else:
-                    q = "SELECT p.id, p.title, p.description, p.price, p.stock, p.created_at, p.seller_id, p.image_url, u.business_name, u.rating, u.username AS seller_username FROM products p LEFT JOIN users u ON p.seller_id = u.id WHERE p.is_active = 1 ORDER BY p.created_at DESC LIMIT ?"
-                    params = [remaining]
-                cur.execute(q, params)
-                more = cur.fetchall()
-                # append backfilled rows
-                featured = featured + more
             conn.close()
     except Exception:
         # On any ORM error, fall back to sqlite3-based behavior to keep the app running.
@@ -701,7 +653,8 @@ def about():
 @app.route('/products')
 def products():
     search = request.args.get('search', '')
-    sort = request.args.get('sort', 'newest')
+    # Default to an alphabetical listing by title (A → Z)
+    sort = request.args.get('sort', 'title_az')
     # pagination
     try:
         page = int(request.args.get('page', 1))
@@ -2319,6 +2272,12 @@ def seller_product_edit(product_id):
         conn.close()
         flash('Product not found.')
         return redirect(url_for('seller_dashboard'))
+    # Convert sqlite3.Row to a plain dict so templates (and later code) can use `.get()` safely.
+    try:
+        product = dict(product)
+    except Exception:
+        # If conversion fails for any reason, leave product as-is; template will handle missing fields.
+        pass
     if product['seller_id'] != uid:
         conn.close()
         flash('Not authorized to edit this product.')

@@ -1,50 +1,68 @@
-<div class="listing-card" style="position:relative;">
-    {# full-card clickable overlay; keep interactive controls above it by raising their z-index #}
-    {% set _detail_url = url_for('product_detail', product_id=p['id']) %}
-    <a href="{{ _detail_url }}" class="card-overlay" aria-label="View {{ p['title'] }}" style="position:absolute; inset:0; z-index:1; text-decoration:none;">&nbsp;</a>
-    <h5>
-        {{ p['title'] }}
-        {% if p['stock'] is not none %}
-            {% set s = p['stock']|int %}
-            {% if s <= 0 %}
-                <span class="badge bg-danger ms-2">Out of stock</span>
-            {% elif s == 1 %}
-                <span class="badge bg-warning text-white ms-2">1 left</span>
-            {% elif s == 2 %}
-                <span class="badge bg-warning text-white ms-2">2 left</span>
-            {% elif s == 3 %}
-                <span class="badge bg-warning text-white ms-2">3 left</span>
-            {% elif s < 5 %}
-                <span class="badge bg-warning text-white ms-2">{{ s }} left</span>
-            {% endif %}
-        {% endif %}
-    </h5>
-    <p class="price">${{ '%.2f'|format(p['price']) }}</p>
-    {# Always render an image container of fixed height so cards align even when an image is missing #}
-    <div class="mb-2 text-center image-box" style="height:160px; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+<div class="listing-card d-flex align-items-start" style="position:relative; gap:1rem; cursor:pointer;">
+  {# full-card clickable overlay covering entire card (high z-index so any click navigates) #}
+  {% set _detail_url = url_for('product_detail', product_id=p['id']) %}
+  <a href="{{ _detail_url }}" class="card-overlay" aria-label="View {{ p['title'] }}" style="position:absolute; inset:0; z-index:1000; text-decoration:none; display:block;">&nbsp;</a>
+
+    <div class="product-image" style="flex:0 0 140px; height:140px; display:flex; align-items:center; justify-content:center; overflow:hidden; background:#fff; border:1px solid #eee; padding:6px;">
         {% if 'image_url' in p.keys() and p['image_url'] %}
             {% set img = p['image_url'] %}
             {% if img.startswith('http://') or img.startswith('https://') or img.startswith('/') %}
-                <img src="{{ img }}" alt="{{ p['title'] }}" style="max-height:100%; width:auto; object-fit:contain; background:#fff; border:1px solid #eee; padding:6px; display:block;">
+                <img src="{{ img }}" alt="{{ p['title'] }}" style="max-height:100%; width:auto; object-fit:contain; display:block;">
             {% else %}
-                <img src="{{ url_for('static', filename='img/' ~ img) }}" alt="{{ p['title'] }}" style="max-height:100%; width:auto; object-fit:contain; background:#fff; border:1px solid #eee; padding:6px; display:block;">
+                <img src="{{ url_for('static', filename='img/' ~ img) }}" alt="{{ p['title'] }}" style="max-height:100%; width:auto; object-fit:contain; display:block;">
             {% endif %}
         {% else %}
-            <div style="width:100%; height:100%; background:#fff; border:1px solid #eee; display:flex; align-items:center; justify-content:center; color:#999; font-size:0.95rem;">No image</div>
+            <div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#999; font-size:0.95rem;">No image</div>
         {% endif %}
     </div>
 
-    <div class="seller-info">
-        <a href="{{ url_for('seller_profile', seller_id=p['seller_id']) }}" class="text-decoration-none" style="position:relative; z-index:3;">
-            <span class="seller-name">{{ p['business_name'] or p['seller_username'] or 'Seller' }}</span>
+    <div class="product-body" style="flex:1 1 auto; min-width:0;">
+      <div class="d-flex justify-content-between align-items-start">
+        <div style="min-width:0;">
+          <h5 style="margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ p['title'] }}</h5>
+        </div>
+        <div class="price-box text-end" style="margin-left:1rem; white-space:nowrap;">
+          <div class="price display-6" style="font-size:1.15rem; font-weight:600;">${{ '%.2f'|format(p['price']) }}</div>
+        </div>
+      </div>
+
+      <div class="seller-info mt-2">
+        <a href="{{ url_for('seller_profile', seller_id=p['seller_id']) }}" class="text-decoration-none" style="color:inherit;">
+            <span class="seller-name small text-muted">{{ p['business_name'] or p['seller_username'] or 'Seller' }}</span>
             {% if p['rating'] %}
-                <span class="rating">★ {{ '%.1f'|format(p['rating']) }}</span>
+                <span class="rating small text-muted"> &middot; ★ {{ '%.1f'|format(p['rating']) }}</span>
             {% endif %}
         </a>
+      </div>
+
+      <div class="d-flex justify-content-between align-items-center mt-3">
+        <span class="text-muted small">Posted {{ (p['created_at'] or '')[:10] }}</span>
+        <a href="{{ url_for('product_detail', product_id=p['id']) }}" class="btn btn-sm btn-outline-primary">View Details</a>
+      </div>
+
+      <div class="d-flex justify-content-between align-items-center mt-2">
+        <span></span>
+        <div class="stock-badges text-end">
+          {% if p['stock'] is not none %}
+            {% set s = p['stock']|int %}
+            {% if s <= 0 %}
+                <div class="badge bg-danger">Out of stock</div>
+            {% elif s <= 3 %}
+                <div class="badge bg-warning text-white">{{ s }} left</div>
+            {% endif %}
+          {% endif %}
+        </div>
+      </div>
     </div>
 
-    <div class="d-flex justify-content-between align-items-center">
-        <span class="text-muted">Posted {{ (p['created_at'] or '')[:10] }}</span>
-        <a href="{{ url_for('product_detail', product_id=p['id']) }}" class="btn btn-sm btn-outline-primary" style="position:relative; z-index:4;">View Details</a>
-    </div>
 </div>
+
+<style>
+  /* Make product cards stack on narrow screens */
+  @media (max-width: 575.98px) {
+    .listing-card.d-flex { flex-direction: column; gap: .65rem; }
+    .listing-card .product-image { width: 100% !important; flex: 0 0 auto; height: 160px; }
+    .listing-card .price-box { text-align: left; margin-left:0; margin-top:.5rem; }
+    .listing-card h5 { white-space: normal; }
+  }
+</style>
