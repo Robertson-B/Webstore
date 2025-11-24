@@ -25,6 +25,7 @@
     </ul>
     <p>Shipping: <strong>${{ '%.2f'|format(shipping_fee) }}</strong></p>
     <p><strong>Total: ${{ '%.2f'|format(total_amount) }}</strong></p>
+    <div id="coupon-info" class="mb-3" style="display:none;"></div>
 
     <form method="post" id="checkout-form">
       <div class="mb-3">
@@ -81,6 +82,8 @@
   document.addEventListener('click', (e)=>{ if(!e.target.closest('.addr-wrap')){ suggBox.style.display='none'; }});
 
   // prefill address field if any (server could inject a default) - left as is.
+  // Show secret coupon if present in localStorage
+  (function(){ try{ const c = localStorage.getItem('coupon.code'); if (c){ const el = document.getElementById('coupon-info'); if (el){ el.style.display='block'; el.innerHTML = `<div class="alert alert-success">Secret coupon applied: <strong>${c}</strong> — apply at payment step (demo only)</div>`; } } }catch(e){} })();
 </script>
 {% include 'footer.html' %}
 </body>

@@ -45,6 +45,38 @@
     <a href="{{ url_for('products') }}" class="btn btn-primary">Continue shopping</a>
     <a href="{{ url_for('cart_view') }}" class="btn btn-outline-secondary">View cart</a>
   </div>
-    {% include 'footer.html' %}
+      <script>
+        // Track purchases for local achievements (adds to localStorage counter)
+        (function(){
+          try{
+            // Build an array of quantities from server-rendered items
+            const qtys = [
+              {% for it in items %}
+                {{ it['quantity'] }}{% if not loop.last %},{% endif %}
+              {% endfor %}
+            ];
+            const sum = qtys.reduce((a,b)=>a+(parseInt(b)||0),0);
+            const key = 'easter.purchased_count';
+            let prev = 0;
+            try{ prev = parseInt(localStorage.getItem(key)||'0') || 0; }catch(e){ prev = 0; }
+            const updated = prev + sum;
+            try{ localStorage.setItem(key, String(updated)); }catch(e){}
+
+            // When crossing 100 total purchased items, unlock the achievement (if available)
+            try{
+              if (updated >= 100) {
+                if (typeof unlock === 'function') {
+                  // avoid unlocking multiple times
+                  const unlocked = JSON.parse(localStorage.getItem('easter.unlocked')||'[]');
+                  if (!unlocked.includes('hundred_shopper')) {
+                    unlock('hundred_shopper','Centurion Shopper','<p>You have purchased 100 items — thanks for shopping!</p>');
+                  }
+                }
+              }
+            }catch(e){ console.warn('achievement publish failed', e); }
+          }catch(e){ /* ignore any template/render errors */ }
+        })();
+      </script>
+      {% include 'footer.html' %}
   </body>
   </html>
